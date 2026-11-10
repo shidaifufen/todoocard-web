@@ -11,9 +11,9 @@
   header{max-width:1240px;margin:0 auto;padding:34px 20px 8px}
   h1{margin:0 0 6px;font-size:24px}
   .sub{color:var(--sub);font-size:13.5px}
-  main{max-width:1240px;margin:0 auto;padding:14px 20px 70px;display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;align-items:start}
+  main{max-width:1240px;margin:0 auto;padding:14px 20px 70px;display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,400px);gap:18px;align-items:start}
   @media(max-width:1000px){main{grid-template-columns:1fr}}
-  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0;overflow:hidden}
   .panel h3{margin:0 0 12px;font-size:14px;color:#cbd2de}
   canvas{width:100%;max-width:400px;display:block;margin:0 auto;border-radius:10px;background:#fff}
   .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
@@ -24,7 +24,7 @@
   button:disabled{opacity:.45}
   label{display:block;font-size:12px;color:var(--sub);margin:10px 0 4px}
   input,textarea,select{width:100%;background:#10131a;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font:inherit}
-  textarea{min-height:64px;max-height:180px;resize:vertical}
+  textarea{min-height:64px;max-height:150px;resize:vertical;overflow:auto}
   .row{display:flex;gap:8px;align-items:center}
   .row > *{min-width:0}
   .sched{display:grid;grid-template-columns:92px 1fr auto auto;gap:6px;margin-bottom:6px}
@@ -57,7 +57,7 @@
     <div id="log" style="margin-top:8px">就绪</div>
   </section>
 
-  <aside style="display:flex;flex-direction:column;gap:14px">
+  <aside style="display:flex;flex-direction:column;gap:14px;min-width:0">
     <section class="panel">
       <h3>内容</h3>
       <div id="params"></div>

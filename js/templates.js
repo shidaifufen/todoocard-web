@@ -264,12 +264,16 @@ export function drawPoem(ctx, st) {
   const p = st.poem || { title: '今日诗词', lines: ['在右侧填写诗句'] };
   head(ctx, p.title, p.dynasty ? `${p.dynasty} · ${p.author || ''}` : '');
   const f = 36, lh = 58;
-  let y = 150;
+  const bodyTop = 132;
   const lines = [];
   p.lines.forEach((l) => lines.push(...wrap(ctx, l, GW, f, '700')));
   const noteLines = st.poemNote ? wrap(ctx, st.poemNote, GW, 21).slice(0, 6) : [];
-  const maxBody = Math.floor((H - 170 - noteLines.length * 34 - 40) / lh);
+  const maxBody = Math.floor((H - 190 - noteLines.length * 34 - 40) / lh);
   const show = lines.slice(0, Math.max(2, maxBody));
+  // 先用临时游标算总高，再整体垂直居中，避免上面挤、下面空一大片
+  const blockH = show.length * lh + (lines.length > show.length ? lh : 0)
+    + (noteLines.length ? noteLines.length * 34 + 52 : 0);
+  let y = bodyTop + Math.max(0, Math.floor((H - 150 - blockH - bodyTop) / 3));
   show.forEach((l) => { txt(ctx, l, M, y, f, '700'); y += lh; });
   if (lines.length > show.length) { txt(ctx, '……', M, y, f, '700'); y += lh; }
   if (noteLines.length) {
