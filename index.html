@@ -343,7 +343,12 @@ function renderSched() {
       <button class="ghost" onclick="delSched(${i})">删</button>
     </div>`).join('');
   $('schedList').querySelectorAll('[data-f]').forEach((el) => {
-    el.onchange = () => { st.sched[el.dataset.i][el.dataset.f] = el.value; save(); };
+    el.onchange = () => {
+      const item = st.sched[el.dataset.i];
+      item[el.dataset.f] = el.value;
+      delete item.lastRun;      // 改了时间/模板就要重新算，否则今天永远不会再触发
+      save();
+    };
   });
 }
 function addSched() { (st.sched = st.sched || []).push({ time: '08:00', template: 'summary' }); save(); renderSched(); }
@@ -373,7 +378,7 @@ function checkSched() {
   const minutesNow = now.getHours() * 60 + now.getMinutes();
   (st.sched || []).forEach((s) => {
     if (!s || !s.time) return;
-    if (s.lastRun === today) return;
+    if (s.lastRun === today) { return; }
     const [hh, mm] = s.time.split(':').map(Number);
     const due = hh * 60 + mm;
     // 允许 5 分钟补跑：后台标签页的定时器会被浏览器降频，逐分钟精确匹配会漏掉
