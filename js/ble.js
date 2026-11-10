@@ -101,14 +101,19 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     packet[0] = i & 0xff; packet[1] = (i >> 8) & 0xff;
     packet[2] = (i >> 16) & 0xff; packet[3] = (i >> 24) & 0xff;
     packet.set(buf.subarray(i * blockSize, (i + 1) * blockSize), 4);
+    // 用 withResponse 写：蓝牙栈会等对端 ATT 确认才发下一包，
+    // 天然流控（Swift 版就是这么写的）。设备不支持时退回 withoutResponse。
     try {
-      await data.writeValueWithoutResponse(packet);
+      await data.writeValueWithResponse(packet);
     } catch (e) {
-      // 掉线常见于设备忙：等 400ms 重试一次，再不行就明确报错
-      await sleep(400);
-      await data.writeValueWithoutResponse(packet);
+      if (String(e).includes('not supported')) {
+        await data.writeValueWithoutResponse(packet);
+        await sleep(8);
+      } else {
+        await sleep(300);
+        await data.writeValueWithResponse(packet);
+      }
     }
-    await sleep(6);
     if ((i + 1) % 32 === 0) onProgress((i + 1) / n);
     if ((i + 1) % 128 === 0) log(`已发送 ${i + 1}/${n} 块（设备回执到 ${acked + 1}）`);
   }
