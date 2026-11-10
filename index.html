@@ -66,10 +66,15 @@
       <h3>照片库 <span class="hint" id="photoCount"></span></h3>
       <div class="row">
         <input id="files" type="file" accept="image/*" multiple style="display:none">
-        <button class="ghost" onclick="files.click()">添加照片</button>
+        <input id="dir" type="file" accept="image/*" multiple webkitdirectory directory style="display:none">
+        <button class="ghost" onclick="files.click()">选择照片</button>
+        <button class="ghost" onclick="dir.click()">添加文件夹</button>
         <button class="ghost" onclick="clearPhotos()">清空</button>
       </div>
-      <div class="photos" id="photoList" style="margin-top:10px"></div>
+      <div id="drop" class="photos" style="margin-top:10px;min-height:74px;border:1px dashed var(--line);border-radius:9px;padding:8px">
+        把照片或整个文件夹拖到这里
+      </div>
+      <div class="photos" id="photoList" style="margin-top:8px"></div>
       <div class="hint" style="margin-top:8px">照片存在浏览器本地；轮播时随机取，尽量不重复。</div>
     </section>
 
@@ -134,16 +139,32 @@ async function loadPhotos() {
   });
   renderPhotos();
 }
-async function addPhotos(files) {
+async function shrink(file, max = 1400) {
+  // 原图动辄几 MB，几十张就撑爆浏览器配额；入库前压到长边 1400、JPEG 0.85
+  const dataUrl = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+  if (file.size < 400 * 1024) return dataUrl;
+  const img = await new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = dataUrl; });
+  const s = Math.min(1, max / Math.max(img.width, img.height));
+  const cv2 = document.createElement('canvas');
+  cv2.width = Math.round(img.width * s); cv2.height = Math.round(img.height * s);
+  cv2.getContext('2d').drawImage(img, 0, 0, cv2.width, cv2.height);
+  return cv2.toDataURL('image/jpeg', 0.85);
+}
+
+async function addPhotos(fileList) {
+  const files = [...fileList].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return;
   const db = await idb();
   for (const f of files) {
-    const data = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
-    const id = f.name + f.size + Math.random().toString(36).slice(2, 8);
-    db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name });
-    photos.push({ id, data, name: f.name });
+    try {
+      const data = await shrink(f);
+      const id = f.name + f.size + Math.random().toString(36).slice(2, 8);
+      db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name });
+      photos.push({ id, data, name: f.name });
+    } catch (e) { log(`跳过 ${f.name}：${e.message}`); }
   }
   renderPhotos();
-  log(`已添加 ${files.length} 张照片，共 ${photos.length} 张`);
+  log(`已添加 ${files.length} 张，共 ${photos.length} 张`);
 }
 async function clearPhotos() {
   const db = await idb();
@@ -316,7 +337,35 @@ function checkSched() {
 }
 
 // ── 事件 ──
-$('files').addEventListener('change', (e) => { addPhotos([...e.target.files]); e.target.value = ''; });
+$('files').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
+$('dir').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
+const drop = $('drop');
+['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = 'var(--accent)'; }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.style.borderColor = 'var(--line)'; }));
+drop.addEventListener('drop', async (e) => {
+  const items = [...(e.dataTransfer?.items || [])];
+  const out = [];
+  for (const it of items) {
+    if (it.kind !== 'file') continue;
+    const entry = it.webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      await new Promise((done) => {
+        const reader = entry.createReader();
+        const read = () => reader.readEntries((ents) => {
+          if (!ents.length) return done();
+          ents.forEach((en) => { if (en.isFile) en.file((f) => f.type.startsWith('image/') && out.push(f)); });
+          read();
+        });
+        read();
+      });
+    } else {
+      const f = it.getAsFile();
+      if (f && f.type.startsWith('image/')) out.push(f);
+    }
+  }
+  log(`拖入 ${out.length} 个文件`);
+  addPhotos(out);
+});
 window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
