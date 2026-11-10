@@ -109,7 +109,10 @@ const log = (m) => {
 // ── 状态持久化 ──
 const DEF = { template: 'quote', quote: '把今天过好，就是对明天最好的准备。',
   todos: ['喝水', '写点东西'], countdowns: [{ name: '元旦', date: '2027-01-01' }],
-  city: '北京', lat: 39.9042, lon: 116.4074, weather: null, hourly: null, sched: [], photoMode: 'shuffle' };
+  city: '北京', lat: 39.9042, lon: 116.4074, weather: null, hourly: null, sched: [], photoMode: 'shuffle',
+  poem: { title: '静夜思', dynasty: '唐代', author: '李白', lines: ['床前明月光，疑是地上霜。', '举头望明月，低头思故乡。'] },
+  poemNote: '诗写夜半难眠时所见：月光落在床前，清冷似霜；抬头望月，低头思乡。以“举头”“低头”两个动作转折，把思乡之情收在无言之中。',
+  custom: { title: '我的卡片', lines: ['今天也要好好生活', '把重要的事写下来'] } };
 let st = Object.assign({}, DEF, JSON.parse(localStorage.getItem('todo-web') || '{}'));
 const save = () => localStorage.setItem('todo-web', JSON.stringify(st));
 
@@ -166,7 +169,8 @@ function pickPhoto() {
 
 // ── 模板 ──
 const TPLS = [['quote', '每日一句'], ['summary', '每日总结'], ['todo', '今日待办'], ['progress', '时间进度'],
-  ['calendar', '月历'], ['countdown', '倒计时'], ['weather', '天气'], ['photo', '照片轮播']];
+  ['calendar', '月历'], ['countdown', '倒计时'], ['weather', '天气'], ['poem', '每日诗词'],
+  ['custom', '自定义'], ['photo', '照片轮播']];
 function renderTabs() {
   $('tabs').innerHTML = TPLS.map(([k, n]) => `<button class="tab ${st.template === k ? 'on' : ''}" data-k="${k}">${n}</button>`).join('');
   $('tabs').querySelectorAll('.tab').forEach((b) => b.onclick = () => { st.template = b.dataset.k; save(); renderTabs(); renderParams(); draw(); });
@@ -179,6 +183,14 @@ function renderParams() {
   else if (k === 'countdown') box.innerHTML = `<label>纪念日（名称,YYYY-MM-DD，每行一条）</label><textarea id="p_cd">${st.countdowns.map(c => c.name + ',' + c.date).join('\n')}</textarea>`;
   else if (k === 'weather' || k === 'summary') box.innerHTML = `<label>城市</label><div class="row"><input id="p_city" value="${st.city}"><button class="ghost" onclick="fetchWeather()">拉取</button></div>
      <div class="hint" style="margin-top:6px">${st.weather ? `${st.weather.temp}° ${st.weather.text}` : '未获取'}</div>`;
+  else if (k === 'poem') box.innerHTML = `
+     <label>标题</label><input id="p_title" value="${st.poem.title}">
+     <label>朝代 / 作者</label><div class="row"><input id="p_dyn" value="${st.poem.dynasty}"><input id="p_author" value="${st.poem.author}"></div>
+     <label>诗句（每行一句）</label><textarea id="p_lines" style="min-height:80px">${st.poem.lines.join('\n')}</textarea>
+     <label>赏析</label><textarea id="p_note">${st.poemNote || ''}</textarea>`;
+  else if (k === 'custom') box.innerHTML = `
+     <label>标题</label><input id="p_ctitle" value="${st.custom.title}">
+     <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>`;
   else if (k === 'photo') box.innerHTML = `<label>轮播方式</label><select id="p_mode"><option value="shuffle">洗牌不重复</option><option value="random">纯随机</option></select><div class="hint" style="margin-top:6px">在下方照片库添加照片</div>`;
   else box.innerHTML = `<div class="hint">这个模板不需要额外设置</div>`;
 
@@ -187,6 +199,13 @@ function renderParams() {
   bind('p_todos', (v) => st.todos = v.split('\n').map(s => s.trim()).filter(Boolean));
   bind('p_cd', (v) => st.countdowns = v.split('\n').map(l => { const [name, date] = l.split(','); return name && date ? { name: name.trim(), date: date.trim() } : null; }).filter(Boolean));
   bind('p_city', (v) => st.city = v.trim());
+  bind('p_title', (v) => st.poem.title = v);
+  bind('p_dyn', (v) => st.poem.dynasty = v);
+  bind('p_author', (v) => st.poem.author = v);
+  bind('p_lines', (v) => st.poem.lines = v.split('\n').map(s => s.trim()).filter(Boolean));
+  bind('p_note', (v) => st.poemNote = v);
+  bind('p_ctitle', (v) => st.custom.title = v);
+  bind('p_clines', (v) => st.custom.lines = v.split('\n').map(s => s.trim()).filter(Boolean));
   const m = $('p_mode'); if (m) { m.value = st.photoMode; m.onchange = () => { st.photoMode = m.value; save(); }; }
 }
 
@@ -211,7 +230,8 @@ function wxText(c) { return c === 0 ? '晴' : c < 4 ? '多云' : c < 50 ? '雾' 
 // ── 绘制 ──
 function draw() {
   const now = new Date();
-  const view = { now, quote: st.quote, todos: st.todos, countdowns: st.countdowns, weather: st.weather, hourly: st.hourly };
+  const view = { now, quote: st.quote, todos: st.todos, countdowns: st.countdowns, weather: st.weather,
+    hourly: st.hourly, poem: st.poem, poemNote: st.poemNote, custom: st.custom };
   if (st.template === 'photo') {
     const p = pickPhoto();
     if (!p) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.fillStyle = '#000'; ctx.font = '20px sans-serif'; ctx.fillText('照片库是空的，先添加照片', 40, 80); return; }
@@ -225,6 +245,8 @@ function draw() {
     return;
   }
   if (st.template === 'weather') return T.drawWeather(ctx, view);
+  if (st.template === 'poem') return T.drawPoem(ctx, view);
+  if (st.template === 'custom') return T.drawCustom(ctx, view);
   if (st.template === 'summary') return T.drawSummary(ctx, view);
   if (st.template === 'todo') return T.drawTodo(ctx, view);
   if (st.template === 'progress') return T.drawProgress(ctx, view);
