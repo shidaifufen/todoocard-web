@@ -32,7 +32,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   }
   if (!ctrl || !data) throw new Error('没找到控制点/数据点特征值');
 
-  let blockSize = 0, ackEnd = false, error = '';
+  let blockSize = 0, ackEnd = false, error = '', acked = -1;
   const onAck = (ev) => {
     const b = new Uint8Array(ev.target.value.buffer);
     log('control ← ' + [...b].map((x) => x.toString(16).padStart(2, '0')).join(' '));
@@ -45,6 +45,10 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     } else if (b[0] === CMD_ACK) {
       if (b[1] === 0x08) ackEnd = true;
       else if (b[1] !== 0) error = '设备返回错误 0x' + b[1].toString(16);
+      else if (b.length >= 6) {
+        // 设备逐块回执：05 00 <idx 4字节小端>
+        acked = Math.max(acked, b[2] | (b[3] << 8) | (b[4] << 16) | (b[5] << 24));
+      }
     }
   };
 
@@ -80,18 +84,33 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   await new Promise((r) => setTimeout(r, 200));
   await ctrl.writeValue(new Uint8Array([CMD_START]));
 
+  // 关键：按设备的逐块回执做流控。写太快会把设备缓冲灌爆，
+  // 表现就是 "GATT Service no longer exists"（设备端直接重启/掉线）。
+  const WINDOW = 20;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < n; i++) {
+    if (error) throw new Error(error);
+    // 领先设备太多就等它回执
+    let guard = 0;
+    while (i - acked > WINDOW && !ackEnd) {
+      if (error) throw new Error(error);
+      await sleep(20);
+      if (++guard > 500) throw new Error('设备回执停滞（超过 10 秒没有进展）');
+    }
     const packet = new Uint8Array(4 + blockSize);
     packet[0] = i & 0xff; packet[1] = (i >> 8) & 0xff;
     packet[2] = (i >> 16) & 0xff; packet[3] = (i >> 24) & 0xff;
     packet.set(buf.subarray(i * blockSize, (i + 1) * blockSize), 4);
-    await data.writeValueWithoutResponse(packet);
-    if (error) throw new Error(error);
-    if ((i + 1) % 32 === 0) {
-      onProgress((i + 1) / n);
-      await new Promise((r) => setTimeout(r, 40));
+    try {
+      await data.writeValueWithoutResponse(packet);
+    } catch (e) {
+      // 掉线常见于设备忙：等 400ms 重试一次，再不行就明确报错
+      await sleep(400);
+      await data.writeValueWithoutResponse(packet);
     }
-    if ((i + 1) % 256 === 0) log(`已发送 ${i + 1}/${n} 块`);
+    await sleep(6);
+    if ((i + 1) % 32 === 0) onProgress((i + 1) / n);
+    if ((i + 1) % 128 === 0) log(`已发送 ${i + 1}/${n} 块（设备回执到 ${acked + 1}）`);
   }
 
   log('数据写完，等显影确认…');
