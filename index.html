@@ -90,10 +90,6 @@
   </aside>
 </main>
 
-<script>
-window.addEventListener('error', e => { document.title = 'ERR: ' + (e.message||''); const d=document.createElement('pre'); d.style.cssText='position:fixed;top:0;left:0;background:#300;color:#fff;z-index:99;padding:8px;font-size:12px'; d.textContent = 'ERR ' + (e.message||'') + '\n' + (e.filename||'') + ':' + e.lineno; document.body.appendChild(d); });
-window.addEventListener('unhandledrejection', e => { const d=document.createElement('pre'); d.style.cssText='position:fixed;top:0;left:0;background:#300;color:#fff;z-index:99;padding:8px;font-size:12px'; d.textContent = 'REJECT ' + (e.reason?.message||e.reason||''); document.body.appendChild(d); });
-</script>
 <script type="module">
 import { buildPayloads } from './js/payload.js';
 import { sendToCard, bleSupported } from './js/ble.js';
@@ -238,10 +234,11 @@ async function fetchWeather() {
     if (!g) throw new Error('找不到这个城市');
     st.lat = g.latitude; st.lon = g.longitude;
     const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${st.lat}&longitude=${st.lon}` +
-      `&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`)).json();
+      `&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`)).json();
     const code = w.current.weather_code;
     st.weather = { temp: w.current.temperature_2m, hi: w.daily.temperature_2m_max[0], lo: w.daily.temperature_2m_min[0],
-      feels: w.current.temperature_2m, text: wxText(code), city: g.name };
+      feels: w.current.apparent_temperature ?? w.current.temperature_2m, code,
+      text: wxText(code), city: g.name };
     st.hourly = w.hourly.time.slice(0, 4).map((t, i) => ({ t: t.slice(11, 16), temp: Math.round(w.hourly.temperature_2m[i]), text: wxText(w.hourly.weather_code[i]) }));
     save(); renderParams(); draw(); log(`天气已更新：${st.weather.temp}° ${st.weather.text}`);
   } catch (e) { log('❌ 天气获取失败：' + e.message); }
@@ -255,7 +252,13 @@ function draw() {
     hourly: st.hourly, poem: st.poem, poemNote: st.poemNote, custom: st.custom };
   if (st.template === 'photo') {
     const p = pickPhoto();
-    if (!p) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.fillStyle = '#000'; ctx.font = '20px sans-serif'; ctx.fillText('照片库是空的，先添加照片', 40, 80); return; }
+    if (!p) {
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#000'; ctx.font = '20px "PingFang SC",sans-serif';
+      ctx.fillText('照片库是空的，先添加照片', 40, 84);
+      photoReady = Promise.resolve();
+      return;
+    }
     const img = new Image();
     photoReady = new Promise((res) => {
       img.onload = () => {
@@ -332,22 +335,32 @@ function startSched() {
 async function acquireDevice() {
   // 刷新页面后 device 会丢，但浏览器仍记得授权过；getDevices 能免弹窗取回
   try {
-    const list = await navigator.bluetooth.getDevices?.();
+    const bt = navigator.bluetooth;
+    if (!bt || !bt.getDevices) return;
+    const list = await bt.getDevices();
     if (list?.length) { device = list[0]; log('已恢复上次授权的设备：' + (device.name || device.id)); }
   } catch (e) { /* 忽略 */ }
 }
 
+let sendingSched = false;
 function checkSched() {
   const now = new Date();
-  const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const today = now.toDateString();
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
   (st.sched || []).forEach((s) => {
-    if (s.time !== hm || s.lastRun === today) return;
+    if (!s || !s.time) return;
+    if (s.lastRun === today) return;
+    const [hh, mm] = s.time.split(':').map(Number);
+    const due = hh * 60 + mm;
+    // 允许 5 分钟补跑：后台标签页的定时器会被浏览器降频，逐分钟精确匹配会漏掉
+    if (minutesNow < due || minutesNow - due > 5) return;
     s.lastRun = today; save();
     log(`⏰ 到点：${s.time} → ${s.template}`);
-    if (!device) { log('⏰ 到点了，但还没授权过卡片：先手动点一次「连接并发送」，之后定时就能自动发'); return; }
+    if (!device) { log('还没授权过卡片：先手动点一次「连接并发送」，之后定时就能自动发'); return; }
+    if (sendingSched) { log('上一个定时任务还在发送，跳过这次'); return; }
+    sendingSched = true;
     st.template = s.template; renderTabs(); renderParams(); draw();
-    setTimeout(() => sendNow(), 300);
+    setTimeout(() => { sendNow().finally(() => { sendingSched = false; }); }, 400);
   });
 }
 
