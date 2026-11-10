@@ -11,9 +11,9 @@
   header{max-width:1240px;margin:0 auto;padding:34px 20px 8px}
   h1{margin:0 0 6px;font-size:24px}
   .sub{color:var(--sub);font-size:13.5px}
-  main{max-width:1240px;margin:0 auto;padding:14px 20px 70px;display:grid;grid-template-columns:1fr 400px;gap:18px}
+  main{max-width:1240px;margin:0 auto;padding:14px 20px 70px;display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;align-items:start}
   @media(max-width:1000px){main{grid-template-columns:1fr}}
-  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0}
   .panel h3{margin:0 0 12px;font-size:14px;color:#cbd2de}
   canvas{width:100%;max-width:400px;display:block;margin:0 auto;border-radius:10px;background:#fff}
   .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
@@ -24,7 +24,7 @@
   button:disabled{opacity:.45}
   label{display:block;font-size:12px;color:var(--sub);margin:10px 0 4px}
   input,textarea,select{width:100%;background:#10131a;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font:inherit}
-  textarea{min-height:64px;resize:vertical}
+  textarea{min-height:64px;max-height:180px;resize:vertical}
   .row{display:flex;gap:8px;align-items:center}
   .row > *{min-width:0}
   .sched{display:grid;grid-template-columns:92px 1fr auto auto;gap:6px;margin-bottom:6px}
@@ -57,7 +57,7 @@
     <div id="log" style="margin-top:8px">就绪</div>
   </section>
 
-  <aside style="display:grid;gap:14px;align-content:start">
+  <aside style="display:flex;flex-direction:column;gap:14px">
     <section class="panel">
       <h3>内容</h3>
       <div id="params"></div>
@@ -205,7 +205,13 @@ function renderParams() {
      <label>标题</label><input id="p_title" value="${st.poem.title}">
      <label>朝代 / 作者</label><div class="row"><input id="p_dyn" value="${st.poem.dynasty}"><input id="p_author" value="${st.poem.author}"></div>
      <label>诗句（每行一句）</label><textarea id="p_lines" style="min-height:80px">${st.poem.lines.join('\n')}</textarea>
-     <label>赏析</label><textarea id="p_note">${st.poemNote || ''}</textarea>`;
+     <label>赏析</label><textarea id="p_note">${st.poemNote || ''}</textarea>
+     <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">用 API 自动生成赏析</summary>
+       <label>接口（OpenAI 兼容）</label><input id="p_api" value="${st.aiEndpoint || 'https://api.deepseek.com/v1'}">
+       <label>API Key</label><input id="p_key" type="password" value="${st.aiKey || ''}">
+       <label>模型</label><input id="p_model" value="${st.aiModel || 'deepseek-chat'}">
+       <div class="btnrow"><button class="ghost" onclick="genNote()">生成赏析</button></div>
+     </details>`;
   else if (k === 'custom') box.innerHTML = `
      <label>标题</label><input id="p_ctitle" value="${st.custom.title}">
      <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>`;
@@ -305,7 +311,8 @@ async function forceScan() {
 }
 
 async function sendNow() {
-  if (!bleSupported()) return log('❌ 浏览器不支持 Web Bluetooth');
+  const btn = $('send');
+  if (!bleSupported()) { btn.disabled = false; return log('❌ 浏览器不支持 Web Bluetooth'); }
   $('send').disabled = true;
   try {
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
@@ -315,8 +322,13 @@ async function sendNow() {
     device = res.device || device;   // 记住设备，定时任务复用（否则每次都要人点）
     $('state').textContent = res.acked ? '✅ 已确认' : '✅ 已写完（未确认）';
     $('state').className = 'hint';
-  } catch (e) { log('❌ ' + (e?.message || e)); }
-  finally { $('send').disabled = false; }
+  } catch (e) {
+    const m = String(e?.message || e);
+    log('❌ ' + m);
+    if (m.includes('disconnected') || m.includes('GATT')) log('提示：设备已断开，再点一次会重新连接');
+  } finally {
+    btn.disabled = false;
+  }
 }
 function rebuild() { draw(); build(); }
 
@@ -406,6 +418,36 @@ drop.addEventListener('drop', async (e) => {
   log(`拖入 ${out.length} 个文件`);
   addPhotos(out);
 });
+async function genNote() {
+  const endpoint = ($('p_api').value || '').trim().replace(/\/$/, '');
+  const key = ($('p_key').value || '').trim();
+  const model = ($('p_model').value || 'deepseek-chat').trim();
+  if (!endpoint || !key) return log('先填接口和 Key');
+  st.aiEndpoint = endpoint; st.aiKey = key; st.aiModel = model; save();
+  log('正在生成赏析…');
+  try {
+    const r = await fetch(endpoint + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      body: JSON.stringify({
+        model,
+        temperature: 0.3,
+        max_tokens: 220,
+        messages: [
+          { role: 'system', content: '你是一名中学语文教材的诗词注释编写者。语言平实准确，按「写的什么景→用什么手法→表达什么情感」三层说明，70~110字，不抒情、不分点、不用引号。' },
+          { role: 'user', content: `《${st.poem.title}》${st.poem.dynasty}${st.poem.author}\n原文：${st.poem.lines.join('／')}` },
+        ],
+      }),
+    });
+    const j = await r.json();
+    const note = (j.choices?.[0]?.message?.content || '').trim();
+    if (!note) throw new Error(j.error?.message || '返回为空');
+    st.poemNote = note; save();
+    $('p_note').value = note; draw();
+    log('赏析已生成（' + note.length + ' 字）');
+  } catch (e) { log('❌ 生成失败：' + (e?.message || e)); }
+}
+window.genNote = genNote;
 window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
