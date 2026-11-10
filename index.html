@@ -40,7 +40,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版</h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-10 c</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-11 a</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <main>
@@ -92,9 +92,9 @@
 </main>
 
 <script type="module">
-import { buildPayloads } from './js/payload.js';
-import { sendToCard, bleSupported } from './js/ble.js';
-import * as T from './js/templates.js';
+import { buildPayloads } from './js/payload.js?v=20261111a';
+import { sendToCard, bleSupported } from './js/ble.js?v=20261111a';
+import * as T from './js/templates.js?v=20261111a';
 
 const W = 528, H = 792;
 const cv = document.getElementById('cv');
