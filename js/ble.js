@@ -10,15 +10,20 @@ export function bleSupported() {
   return 'bluetooth' in navigator;
 }
 
-export async function sendToCard(payload, log = console.log, onProgress = () => {}) {
+export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null) {
   if (!bleSupported()) throw new Error('这个浏览器不支持 Web Bluetooth，请用 Chrome / Edge');
 
-  log('选择设备…');
-  const device = await navigator.bluetooth.requestDevice({
-    acceptAllDevices: true,
-    optionalServices: [...SVC],
-  });
-  log(`已选择：${device.name || device.id}`);
+  let device = reuse;
+  if (device) {
+    log(`复用已授权的设备：${device.name || device.id}`);
+  } else {
+    log('选择设备…');
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [...SVC],
+    });
+    log(`已选择：${device.name || device.id}`);
+  }
 
   const server = await device.gatt.connect();
   const services = await server.getPrimaryServices();
@@ -127,5 +132,5 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   onProgress(1);
   try { await ctrl.stopNotifications(); } catch (e) { /* ignore */ }
   try { device.gatt.disconnect(); } catch (e) { /* ignore */ }
-  return { ok: true, acked: ackEnd, blocks: n };
+  return { ok: true, acked: ackEnd, blocks: n, device };
 }

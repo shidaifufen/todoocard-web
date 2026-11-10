@@ -296,7 +296,8 @@ async function sendNow() {
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
     if (st.template === 'photo') await photoReady;
     const arts = await build();
-    const res = await sendToCard(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%');
+    const res = await sendToCard(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%', device);
+    device = res.device || device;   // 记住设备，定时任务复用（否则每次都要人点）
     $('state').textContent = res.acked ? '✅ 已确认' : '✅ 已写完（未确认）';
     $('state').className = 'hint';
   } catch (e) { log('❌ ' + (e?.message || e)); }
@@ -328,6 +329,14 @@ function startSched() {
   $('schedState').textContent = '运行中（页面需保持打开）';
   checkSched();
 }
+async function acquireDevice() {
+  // 刷新页面后 device 会丢，但浏览器仍记得授权过；getDevices 能免弹窗取回
+  try {
+    const list = await navigator.bluetooth.getDevices?.();
+    if (list?.length) { device = list[0]; log('已恢复上次授权的设备：' + (device.name || device.id)); }
+  } catch (e) { /* 忽略 */ }
+}
+
 function checkSched() {
   const now = new Date();
   const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -336,7 +345,7 @@ function checkSched() {
     if (s.time !== hm || s.lastRun === today) return;
     s.lastRun = today; save();
     log(`⏰ 到点：${s.time} → ${s.template}`);
-    if (!device) { log('没有已连接的卡片，跳过自动发送（手动点一次发送会授权）'); return; }
+    if (!device) { log('⏰ 到点了，但还没授权过卡片：先手动点一次「连接并发送」，之后定时就能自动发'); return; }
     st.template = s.template; renderTabs(); renderParams(); draw();
     setTimeout(() => sendNow(), 300);
   });
@@ -376,6 +385,7 @@ window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = s
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();
+acquireDevice();
 loadPhotos().catch((e) => log('照片库不可用：' + (e?.message || e)));
 if (!st.weather && (st.template === 'weather' || st.template === 'summary')) fetchWeather();
 draw();
