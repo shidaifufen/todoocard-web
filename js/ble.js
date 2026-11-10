@@ -24,6 +24,9 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
       device = await navigator.bluetooth.requestDevice({
         // 同时给 services 和 namePrefix：安卓只按服务过滤，macOS 只按名字过滤
         filters: [
+          // 卡片广播里带厂商 ID 0x5053（"PS"），这是唯一能稳定命中它的条件：
+          // 安卓上它不一定带名字、也不一定在广播里带服务 UUID。
+          { manufacturerData: [{ companyIdentifier: 0x5053 }] },
           { services: [SVC[0]] },
           { services: [SVC[1]] },
           { namePrefix: 'Todoo' },

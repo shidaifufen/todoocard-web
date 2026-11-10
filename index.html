@@ -298,6 +298,7 @@ async function forceScan() {
   try {
     log('列出全部蓝牙设备…（安卓需要在系统里允许「附近的设备/位置」权限）');
     const d = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [0xfef0, 0xfdf0] });
+    log('（若列表里都是「未知设备」，说明系统没扫到卡片：先确认桌面服务已暂停、卡片已唤醒）');
     device = d;
     log('已选择：' + (d.name || d.id) + '，现在点「连接并发送」');
   } catch (e) { log('❌ ' + (e?.message || e)); }
