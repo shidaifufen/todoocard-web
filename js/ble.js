@@ -18,31 +18,11 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     log(`复用已授权的设备：${device.name || device.id}`);
   } else {
     log('选择设备…');
-    // 优先按名字过滤：macOS 上 Chrome 会把"所有 BLE 设备"都丢进系统配对框，
-    // 里面全是 iPhone/耳机，反而选不到卡片。按名字过滤能只留 TodooCard。
-    try {
-      device = await navigator.bluetooth.requestDevice({
-        // 同时给 services 和 namePrefix：安卓只按服务过滤，macOS 只按名字过滤
-        filters: [
-          // 卡片广播里带厂商 ID 0x5053（"PS"），这是唯一能稳定命中它的条件：
-          // 安卓上它不一定带名字、也不一定在广播里带服务 UUID。
-          { manufacturerData: [{ companyIdentifier: 0x5053 }] },
-          { services: [SVC[0]] },
-          { services: [SVC[1]] },
-          { namePrefix: 'Todoo' },
-          { namePrefix: 'FFFF' },
-        ],
-        optionalServices: [...SVC],
-      });
-    } catch (e) {
-      if (e?.name === 'NotFoundError') {
-        log('按名字没找到，改为列出全部设备…');
-        device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [...SVC],
-        });
-      } else throw e;
-    }
+    // 回到最宽松的方式：列出所有 BLE 设备。过滤条件越严，安卓/macOS 上越容易一个都匹配不到。
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [...SVC],
+    });
     log(`已选择：${device.name || device.id}`);
   }
 
