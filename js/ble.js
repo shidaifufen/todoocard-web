@@ -22,7 +22,13 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     // 里面全是 iPhone/耳机，反而选不到卡片。按名字过滤能只留 TodooCard。
     try {
       device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'Todoo' }, { namePrefix: 'FFFF' }, { namePrefix: 'TodooCard' }],
+        // 同时给 services 和 namePrefix：安卓只按服务过滤，macOS 只按名字过滤
+        filters: [
+          { services: [SVC[0]] },
+          { services: [SVC[1]] },
+          { namePrefix: 'Todoo' },
+          { namePrefix: 'FFFF' },
+        ],
         optionalServices: [...SVC],
       });
     } catch (e) {

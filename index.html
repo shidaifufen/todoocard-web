@@ -49,6 +49,7 @@
     <canvas id="cv" width="528" height="792"></canvas>
     <div class="row" style="margin-top:12px">
       <button id="send" onclick="sendNow()" style="flex:1">连接并发送</button>
+      <button class="ghost" onclick="forceScan()" title="按名字找不到时用这个">扫描全部</button>
       <button class="ghost" onclick="rebuild()">重新生成</button>
     </div>
     <div class="bar"><i id="prog"></i></div>
@@ -292,6 +293,16 @@ async function build() {
   log(`已生成 payload ${arts.payload.length} B（${(performance.now() - t0).toFixed(0)} ms）`);
   return arts;
 }
+async function forceScan() {
+  if (!('bluetooth' in navigator)) return log('浏览器不支持 Web Bluetooth（iOS 全部不支持，请用安卓 Chrome）');
+  try {
+    log('列出全部蓝牙设备…（安卓需要在系统里允许「附近的设备/位置」权限）');
+    const d = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [0xfef0, 0xfdf0] });
+    device = d;
+    log('已选择：' + (d.name || d.id) + '，现在点「连接并发送」');
+  } catch (e) { log('❌ ' + (e?.message || e)); }
+}
+
 async function sendNow() {
   if (!bleSupported()) return log('❌ 浏览器不支持 Web Bluetooth');
   $('send').disabled = true;
@@ -394,7 +405,7 @@ drop.addEventListener('drop', async (e) => {
   log(`拖入 ${out.length} 个文件`);
   addPhotos(out);
 });
-window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
+window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();
