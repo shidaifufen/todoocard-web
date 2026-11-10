@@ -18,10 +18,22 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     log(`复用已授权的设备：${device.name || device.id}`);
   } else {
     log('选择设备…');
-    device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [...SVC],
-    });
+    // 优先按名字过滤：macOS 上 Chrome 会把"所有 BLE 设备"都丢进系统配对框，
+    // 里面全是 iPhone/耳机，反而选不到卡片。按名字过滤能只留 TodooCard。
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'Todoo' }, { namePrefix: 'FFFF' }, { namePrefix: 'TodooCard' }],
+        optionalServices: [...SVC],
+      });
+    } catch (e) {
+      if (e?.name === 'NotFoundError') {
+        log('按名字没找到，改为列出全部设备…');
+        device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [...SVC],
+        });
+      } else throw e;
+    }
     log(`已选择：${device.name || device.id}`);
   }
 
