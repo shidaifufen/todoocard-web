@@ -257,11 +257,15 @@ function draw() {
     const p = pickPhoto();
     if (!p) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.fillStyle = '#000'; ctx.font = '20px sans-serif'; ctx.fillText('照片库是空的，先添加照片', 40, 80); return; }
     const img = new Image();
-    img.onload = () => {
-      const s = Math.max(W / img.width, H / img.height);
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
-      ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
-    };
+    photoReady = new Promise((res) => {
+      img.onload = () => {
+        const s = Math.max(W / img.width, H / img.height);
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+        ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+        res();
+      };
+      img.onerror = () => res();
+    });
     img.src = p.data;
     return;
   }
@@ -278,6 +282,7 @@ function draw() {
 
 // ── 发送 ──
 let device = null;
+let photoReady = Promise.resolve();   // 预览那张图加载完成的信号，发送前等它
 async function build() {
   const t0 = performance.now();
   const arts = buildPayloads(ctx.getImageData(0, 0, W, H));
@@ -288,7 +293,8 @@ async function sendNow() {
   if (!bleSupported()) return log('❌ 浏览器不支持 Web Bluetooth');
   $('send').disabled = true;
   try {
-    if (st.template === 'photo') { draw(); await new Promise(r => setTimeout(r, 300)); }
+    // 不要在发送前重画：那会重新抽一张照片，和预览不一致
+    if (st.template === 'photo') await photoReady;
     const arts = await build();
     const res = await sendToCard(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%');
     $('state').textContent = res.acked ? '✅ 已确认' : '✅ 已写完（未确认）';
