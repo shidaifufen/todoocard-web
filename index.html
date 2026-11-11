@@ -100,6 +100,7 @@
   </aside>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261111a';
 import { sendToCard, bleSupported } from './js/ble.js?v=20261111a';
@@ -157,6 +158,62 @@ async function shrink(file, max = 1400) {
   return cv2.toDataURL('image/jpeg', 0.85);
 }
 
+
+// ── 精简 EXIF 解析：只取照片信息带要用的字段 ──
+async function readExif(file) {
+  try {
+    const buf = new DataView(await file.arrayBuffer());
+    if (buf.getUint16(0) !== 0xFFD8) return null;
+    let off = 2, tiff = -1;
+    while (off < buf.byteLength - 4) {
+      const marker = buf.getUint16(off);
+      const len = buf.getUint16(off + 2);
+      if (marker === 0xFFE1 && buf.getUint32(off + 4) === 0x45786966) { tiff = off + 10; break; }
+      off += 2 + len;
+    }
+    if (tiff < 0) return null;
+    const le = buf.getUint16(tiff) === 0x4949;
+    const u16 = (o) => buf.getUint16(o, le), u32 = (o) => buf.getUint32(o, le);
+    const ifd0 = tiff + u32(tiff + 4);
+    const readIfd = (base) => {
+      const n = u16(base), out = {};
+      for (let i = 0; i < n; i++) {
+        const e = base + 2 + i * 12;
+        const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
+        const valOff = cnt * (type === 3 ? 2 : type === 4 ? 4 : 1) > 4 ? tiff + u32(e + 8) : e + 8;
+        out[tag] = { type, cnt, valOff };
+      }
+      return out;
+    };
+    const str = (ent) => {
+      if (!ent) return '';
+      let end = ent.valOff, n = ent.cnt;
+      while (n-- && buf.getUint8(end)) end++;
+      return new TextDecoder().decode(new Uint8Array(buf.buffer, ent.valOff, end - ent.valOff)).trim();
+    };
+    const rat = (ent) => (ent ? u32(ent.valOff) / (u32(ent.valOff + 4) || 1) : 0);
+    const d0 = readIfd(ifd0);
+    const make = str(d0[0x010F]), model = str(d0[0x0110]);
+    let exif = {}, gps = {};
+    if (d0[0x8769]) exif = readIfd(tiff + u32(d0[0x8769].valOff));
+    if (d0[0x8825]) gps = readIfd(tiff + u32(d0[0x8825].valOff));
+    const dt = str(exif[0x9003]);
+    const fnum = rat(exif[0x829D]);
+    const expo = rat(exif[0x829A]);
+    const iso = exif[0x8827] ? u16(exif[0x8827].valOff) : 0;
+    const focal = rat(exif[0x920A]);
+    return {
+      taken: dt ? dt.replace(/^\d{4}:/, '').slice(0, 10) : '',
+      time: dt ? dt.slice(11, 16) : '',
+      camera: [make, model].filter(Boolean).join(' ').replace(/\s+/g, ' '),
+      params: [focal ? `${Math.round(focal)}mm` : '', fnum ? `f/${fnum}` : '',
+               expo ? (expo < 1 ? `1/${Math.round(1 / expo)}s` : `${expo}s`) : '',
+               iso ? `ISO${iso}` : ''].filter(Boolean).join('  '),
+      hasGps: !!gps[0x0001]
+    };
+  } catch (e) { return null; }
+}
+
 async function addPhotos(fileList) {
   const files = [...fileList].filter((f) => f.type.startsWith('image/'));
   if (!files.length) return;
@@ -165,8 +222,9 @@ async function addPhotos(fileList) {
     try {
       const data = await shrink(f);
       const id = f.name + f.size + Math.random().toString(36).slice(2, 8);
-      db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name });
-      photos.push({ id, data, name: f.name });
+      db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name, exif });
+      const exif = await readExif(f);
+      photos.push({ id, data, name: f.name, exif });
     } catch (e) { log(`跳过 ${f.name}：${e.message}`); }
   }
   renderPhotos();
@@ -225,7 +283,8 @@ function renderParams() {
      </details>`;
   else if (k === 'custom') box.innerHTML = `
      <label>标题</label><input id="p_ctitle" value="${st.custom.title}">
-     <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>`;
+     <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>
+     <label>二维码内容（链接/文本，留空不画）</label><input id="p_cqr" value="${st.custom.qr || ''}" placeholder="https://github.com/...">`;
   else if (k === 'photo') box.innerHTML = `<label>轮播方式</label><select id="p_mode"><option value="shuffle">洗牌不重复</option><option value="random">纯随机</option></select><div class="hint" style="margin-top:6px">在下方照片库添加照片</div>`;
   else box.innerHTML = `<div class="hint">这个模板不需要额外设置</div>`;
 
@@ -241,6 +300,7 @@ function renderParams() {
   bind('p_note', (v) => st.poemNote = v);
   bind('p_ctitle', (v) => st.custom.title = v);
   bind('p_clines', (v) => st.custom.lines = v.split('\n').map(s => s.trim()).filter(Boolean));
+  bind('p_cqr', (v) => st.custom.qr = v.trim());
   const pf = $('p_full');
   if (pf) { pf.value = st.poemFull ? '1' : '0'; pf.onchange = () => { st.poemFull = pf.value === '1'; save(); draw(); }; }
   const m = $('p_mode'); if (m) { m.value = st.photoMode; m.onchange = () => { st.photoMode = m.value; save(); }; }
@@ -283,9 +343,24 @@ function draw() {
     const img = new Image();
     photoReady = new Promise((res) => {
       img.onload = () => {
-        const s = Math.max(W / img.width, H / img.height);
+        const e = p.exif;
+        const hasInfo = e && (e.taken || e.camera || e.params);
+        const band = hasInfo ? 78 : 0;
+        const ph = H - band;
+        const s = Math.max(W / img.width, ph / img.height);
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
-        ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+        ctx.drawImage(img, (W - img.width * s) / 2, (ph - img.height * s) / 2, img.width * s, img.height * s);
+        if (band) {
+          ctx.fillStyle = '#fff'; ctx.fillRect(0, ph, W, band);
+          ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(0, ph); ctx.lineTo(W, ph); ctx.stroke();
+          ctx.fillStyle = '#000';
+          ctx.font = '700 22px "PingFang SC","Microsoft YaHei",sans-serif';
+          ctx.fillText(`${e.taken || ''} ${e.time || ''}`.trim() || '—', 32, ph + 32);
+          if (e.params) { ctx.font = '400 16px "PingFang SC",sans-serif'; ctx.fillText(e.params, 32, ph + 62); }
+          if (e.camera) { ctx.font = '400 15px "PingFang SC",sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText(e.camera, W - 32, ph + 62); ctx.textAlign = 'left'; }
+        }
         res();
       };
       img.onerror = () => res();

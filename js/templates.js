@@ -302,6 +302,25 @@ export function drawCustom(ctx, st) {
   txt(ctx, WEEK[st.now.getDay()], M + 2, 278, 15);
   let y = 340;
   (c.lines || []).slice(0, 6).forEach((l) => { txt(ctx, l, M, y, 24); y += Math.round(44 * LS); });
+
+  // 二维码：内容填在 c.qr，靠 CDN 的 qrcode-generator 生成矩阵
+  if (c.qr && typeof window.qrcode === 'function') {
+    const qr = window.qrcode(0, 'M');
+    qr.addData(String(c.qr));
+    qr.make();
+    const n = qr.getModuleCount();
+    const cell = Math.max(2, Math.floor(Math.min(300, H - y - 120) / n));
+    const size = cell * n;
+    const ox = M + Math.floor((W - M * 2 - size) / 2);
+    ctx.fillStyle = WHITE; ctx.fillRect(ox - 6, y - 6, size + 12, size + 12);
+    ctx.strokeStyle = BLACK; ctx.lineWidth = 2; ctx.strokeRect(ox - 6, y - 6, size + 12, size + 12);
+    ctx.fillStyle = BLACK;
+    for (let r = 0; r < n; r++) {
+      for (let col = 0; col < n; col++) {
+        if (qr.isDark(r, col)) ctx.fillRect(ox + col * cell, y + r * cell, cell, cell);
+      }
+    }
+  }
   footer(ctx);
 }
 
