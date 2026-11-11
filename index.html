@@ -40,8 +40,17 @@
 <body>
 <header>
   <h1>土豆片 · 网页版</h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-11 a</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-11 b</b> · 定时任务需要页面保持打开</p>
 </header>
+
+<div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+  <span style="color:var(--sub);font-size:13px">字号</span>
+  <input id="scaleSlide" type="range" min="90" max="160" step="5" value="100" style="width:220px;max-width:40vw">
+  <span id="scaleText" style="color:var(--sub);font-size:13px;width:44px">100%</span>
+  <span style="color:var(--sub);font-size:13px;margin-left:10px">行距</span>
+  <input id="lineSlide" type="range" min="90" max="180" step="5" value="100" style="width:220px;max-width:40vw">
+  <span id="lineText" style="color:var(--sub);font-size:13px;width:44px">100%</span>
+</div>
 
 <main>
   <section class="panel">
@@ -187,7 +196,7 @@ function pickPhoto() {
 
 // ── 模板 ──
 const TPLS = [['quote', '每日一句'], ['summary', '每日总结'], ['todo', '今日待办'], ['progress', '时间进度'],
-  ['calendar', '月历'], ['countdown', '倒计时'], ['weather', '天气'], ['poem', '每日诗词'],
+  ['calendar', '月历'], ['countdown', '倒计时'], ['weather', '天气'], ['weather2', '色块天气'], ['poem', '每日诗词'],
   ['custom', '自定义'], ['photo', '照片轮播']];
 function renderTabs() {
   $('tabs').innerHTML = TPLS.map(([k, n]) => `<button class="tab ${st.template === k ? 'on' : ''}" data-k="${k}">${n}</button>`).join('');
@@ -202,6 +211,8 @@ function renderParams() {
   else if (k === 'weather' || k === 'summary') box.innerHTML = `<label>城市</label><div class="row"><input id="p_city" value="${st.city}"><button class="ghost" onclick="fetchWeather()">拉取</button></div>
      <div class="hint" style="margin-top:6px">${st.weather ? `${st.weather.temp}° ${st.weather.text}` : '未获取'}</div>`;
   else if (k === 'poem') box.innerHTML = `
+     <label>整首优先（不截断，字号自动缩）</label>
+     <select id="p_full"><option value="0">关（大字优先）</option><option value="1">开（整首优先）</option></select>
      <label>标题</label><input id="p_title" value="${st.poem.title}">
      <label>朝代 / 作者</label><div class="row"><input id="p_dyn" value="${st.poem.dynasty}"><input id="p_author" value="${st.poem.author}"></div>
      <label>诗句（每行一句）</label><textarea id="p_lines" style="min-height:80px">${st.poem.lines.join('\n')}</textarea>
@@ -230,6 +241,8 @@ function renderParams() {
   bind('p_note', (v) => st.poemNote = v);
   bind('p_ctitle', (v) => st.custom.title = v);
   bind('p_clines', (v) => st.custom.lines = v.split('\n').map(s => s.trim()).filter(Boolean));
+  const pf = $('p_full');
+  if (pf) { pf.value = st.poemFull ? '1' : '0'; pf.onchange = () => { st.poemFull = pf.value === '1'; save(); draw(); }; }
   const m = $('p_mode'); if (m) { m.value = st.photoMode; m.onchange = () => { st.photoMode = m.value; save(); }; }
 }
 
@@ -256,7 +269,8 @@ function wxText(c) { return c === 0 ? '晴' : c < 4 ? '多云' : c < 50 ? '雾' 
 function draw() {
   const now = new Date();
   const view = { now, quote: st.quote, todos: st.todos, countdowns: st.countdowns, weather: st.weather,
-    hourly: st.hourly, poem: st.poem, poemNote: st.poemNote, custom: st.custom };
+    hourly: st.hourly, poem: st.poem, poemNote: st.poemNote, custom: st.custom,
+    poemFull: st.poemFull };
   if (st.template === 'photo') {
     const p = pickPhoto();
     if (!p) {
@@ -280,6 +294,7 @@ function draw() {
     return;
   }
   if (st.template === 'weather') return T.drawWeather(ctx, view);
+  if (st.template === 'weather2') return T.drawWeather2(ctx, view);
   if (st.template === 'poem') return T.drawPoem(ctx, view);
   if (st.template === 'custom') return T.drawCustom(ctx, view);
   if (st.template === 'summary') return T.drawSummary(ctx, view);
@@ -457,6 +472,24 @@ window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();
+
+// 字号/行距滑杆：基准 1.1，与桌面版一致
+const scaleSlide = document.getElementById('scaleSlide');
+const lineSlide = document.getElementById('lineSlide');
+function applyLayout() {
+  const fs = (+scaleSlide.value) / 100;
+  const ls = (+lineSlide.value) / 100;
+  st.scale = fs; st.line = ls; save();
+  document.getElementById('scaleText').textContent = scaleSlide.value + '%';
+  document.getElementById('lineText').textContent = lineSlide.value + '%';
+  T.setLayout(1.1 * fs, 1.1 * ls);
+  draw();
+}
+scaleSlide.value = Math.round((st.scale || 1) * 100);
+lineSlide.value = Math.round((st.line || 1) * 100);
+scaleSlide.addEventListener('input', applyLayout);
+lineSlide.addEventListener('input', applyLayout);
+T.setLayout(1.1 * (st.scale || 1), 1.1 * (st.line || 1));
 acquireDevice();
 loadPhotos().catch((e) => log('照片库不可用：' + (e?.message || e)));
 if (!st.weather && (st.template === 'weather' || st.template === 'summary')) fetchWeather();

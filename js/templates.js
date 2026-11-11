@@ -4,7 +4,13 @@ const BLACK = '#000', WHITE = '#fff', RED = '#ff0000', YELLOW = '#ffff00', BLUE 
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const F = (w, s) => `${w} ${s}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
 
-const ctxFont = (ctx, size, weight = '400') => { ctx.font = F(weight, size); };
+let FS = 1.1;   // 字号基准（滑杆会在其上再乘）
+let LS = 1.1;   // 行距基准
+export function setLayout(fs, ls) {
+  FS = Math.max(0.6, Math.min(2.2, fs || 1.1));
+  LS = Math.max(0.8, Math.min(2.2, ls || 1.1));
+}
+const ctxFont = (ctx, size, weight = '400') => { ctx.font = F(weight, Math.round(size * FS)); };
 const tw = (ctx, s, size, weight = '400') => { ctxFont(ctx, size, weight); return ctx.measureText(s).width; };
 const txt = (ctx, s, x, y, size, weight = '400', color = BLACK) => { ctxFont(ctx, size, weight); ctx.fillStyle = color; ctx.fillText(s, x, y); };
 const rtxt = (ctx, s, y, size, weight = '400', color = BLACK) => txt(ctx, s, W - M - tw(ctx, s, size, weight), y, size, weight, color);
@@ -81,7 +87,7 @@ export function drawQuote(ctx, st) {
   ctx.fillStyle = RED; ctx.fillRect(M, 168, 8, 210);
   const lines = wrap(ctx, st.quote, GW - 50, 40, '700').slice(0, 6);
   let y = 205;
-  lines.forEach((l) => { txt(ctx, l, M + 34, y, 40, '700'); y += 58; });
+  lines.forEach((l) => { txt(ctx, l, M + 34, y, 40, '700'); y += Math.round(58 * LS); });
   txt(ctx, '— 今日一句', M + 34, y + 10, 18);
   [RED, YELLOW, BLUE].forEach((c, i) => { ctx.beginPath(); ctx.arc(M + 10 + i * 22, H - 122, 7, 0, Math.PI * 2); ctx.fillStyle = c; ctx.fill(); });
   footer(ctx, 'hitokoto', `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`);
@@ -105,8 +111,8 @@ export function drawSummary(ctx, st) {
   txt(ctx, '今日待办', M, 320, 20, '700');
   rtxt(ctx, `${st.todos.length} 项`, 316, 16);
   let y = 358;
-  if (!st.todos.length) { txt(ctx, '今天还没有安排', M, y, 20); y += 40; }
-  st.todos.slice(0, 3).forEach((item) => { txt(ctx, '· ' + item, M, y, 22); y += 34; });
+  if (!st.todos.length) { txt(ctx, '今天还没有安排', M, y, 20); y += Math.round(40 * LS); }
+  st.todos.slice(0, 3).forEach((item) => { txt(ctx, '· ' + item, M, y, 22); y += Math.round(34 * LS); });
   const mp = t.getDate() / new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
   txt(ctx, '本月', M, y + 26, 15, '700');
   rtxt(ctx, `${Math.round(mp * 100)}%`, y + 22, 15);
@@ -128,7 +134,7 @@ export function drawTodo(ctx, st) {
     const l = wrap(ctx, item, GW - 50, 24)[0] || '';
     txt(ctx, l, M + 40, y + 22, 24);
     ctx.fillStyle = BLACK; ctx.fillRect(M + 40, y + 34, GW - 44, 2);
-    y += 64;
+    y += Math.round(64 * LS);
   });
   footer(ctx, '勾掉一件算一件');
 }
@@ -155,7 +161,7 @@ export function drawProgress(ctx, st) {
   }
   let y = dy + Math.ceil(total / cols) * gap + 24;
   ctx.fillStyle = BLACK; ctx.fillRect(M, y, GW, 2);
-  y += 28;
+  y += Math.round(28 * LS);
   const m0 = new Date(now.getFullYear(), now.getMonth(), 1), m1 = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const rows = [
     ['本月', (now - m0) / (m1 - m0), GREEN],
@@ -166,7 +172,7 @@ export function drawProgress(ctx, st) {
     txt(ctx, label, M, y + 18, 19, '700');
     txt(ctx, `${Math.round(p * 100)}%`, M + 58, y + 16, 19);
     bar(ctx, M + 136, y, GW - 136, 22, p, c);
-    y += 42;
+    y += Math.round(42 * LS);
   });
   txt(ctx, '今年还剩', M, H - 100, 19, '700');
   ctx.fillStyle = RED; ctx.fillRect(M, H - 86, 10, 38);
@@ -214,7 +220,7 @@ export function drawCountdown(ctx, st) {
     txt(ctx, c.name, M, y, 22, '700');
     rtxt(ctx, `${d} 天`, y + 4, 22);
     ctx.fillStyle = BLACK; ctx.fillRect(M, y + 12, GW, 1);
-    y += 64;
+    y += Math.round(64 * LS);
   });
   footer(ctx);
 }
@@ -269,7 +275,7 @@ export function drawPoem(ctx, st) {
   p.lines.forEach((l) => lines.push(...wrap(ctx, l, GW, f, '700')));
   const noteLines = st.poemNote ? wrap(ctx, st.poemNote, GW, 21).slice(0, 6) : [];
   const maxBody = Math.floor((H - 190 - noteLines.length * 34 - 40) / lh);
-  const show = lines.slice(0, Math.max(2, maxBody));
+  const show = st.poemFull ? lines : lines.slice(0, Math.max(2, maxBody));
   // 先用临时游标算总高，再整体垂直居中，避免上面挤、下面空一大片
   const blockH = show.length * lh + (lines.length > show.length ? lh : 0)
     + (noteLines.length ? noteLines.length * 34 + 52 : 0);
@@ -277,9 +283,9 @@ export function drawPoem(ctx, st) {
   show.forEach((l) => { txt(ctx, l, M, y, f, '700'); y += lh; });
   if (lines.length > show.length) { txt(ctx, '……', M, y, f, '700'); y += lh; }
   if (noteLines.length) {
-    y += 6; rule(ctx, y); y += 16;
-    txt(ctx, '赏析', M, y, 17, '700', RED); y += 30;
-    noteLines.forEach((l) => { txt(ctx, l, M, y, 21); y += 34; });
+    y += Math.round(6 * LS); rule(ctx, y); y += Math.round(16 * LS);
+    txt(ctx, '赏析', M, y, 17, '700', RED); y += Math.round(30 * LS);
+    noteLines.forEach((l) => { txt(ctx, l, M, y, 21); y += Math.round(34 * LS); });
   }
   ctx.fillStyle = RED; ctx.fillRect(W - M - 54, H - 118, 54, 54);
   txt(ctx, '诗', W - M - 44, H - 78, 26, '700', WHITE);
@@ -295,6 +301,88 @@ export function drawCustom(ctx, st) {
   txt(ctx, `${st.now.getMonth() + 1}月`, M + 2, 254, 18, '700');
   txt(ctx, WEEK[st.now.getDay()], M + 2, 278, 15);
   let y = 340;
-  (c.lines || []).slice(0, 6).forEach((l) => { txt(ctx, l, M, y, 24); y += 44; });
+  (c.lines || []).slice(0, 6).forEach((l) => { txt(ctx, l, M, y, 24); y += Math.round(44 * LS); });
   footer(ctx);
+}
+
+
+// ── 色块天气（与桌面版同一版式）──
+export function drawWeather2(ctx, st) {
+  bg(ctx);
+  const w = st.weather;
+  const C = (x0, y0, x1, y1, fill = WHITE, outline = BLACK) => {
+    ctx.fillStyle = fill; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.strokeStyle = outline; ctx.lineWidth = 3; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  };
+  const aqiColor = (a) => (a <= 50 ? GREEN : a <= 100 ? YELLOW : RED);
+  const d = new Date();
+  const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+  if (!w || w.temp == null) {
+    txt(ctx, '天气获取失败：点右侧「拉取」', M, 200, 22);
+    return;
+  }
+
+  const top = M;
+  C(M, top, W - M, top + 84);
+  txt(ctx, w.city || '本地', M + 16, top + 44, 34, '700');
+  txt(ctx, '色块天气', M + 16, top + 70, 14);
+  C(W - M - 210, top, W - M, top + 84, YELLOW);
+  txt(ctx, `${week[d.getDay()]} ${d.toTimeString().slice(0,5)}`, W - M - 194, top + 52, 26, '700');
+
+  const y0 = top + 84, y1 = y0 + 250, midX = M + Math.round((W - M * 2) * 0.60);
+  C(M, y0, midX, y1);
+  txt(ctx, String(Math.round(w.temp)), M + 18, y0 + 96, 92, '700');
+  txt(ctx, '°C', M + 18 + tw(ctx, String(Math.round(w.temp)), 92), y0 + 60, 34);
+  txt(ctx, w.text || '', M + 20, y0 + 176, 36, '700');
+  txt(ctx, `今日 ${Math.round(w.lo)}—${Math.round(w.hi)}℃`, M + 20, y0 + 220, 19);
+
+  const aq = w.aqi ?? 0;
+  C(midX, y0, W - M, y0 + 132, aqiColor(aq));
+  const light = aqiColor(aq) === YELLOW;
+  txt(ctx, '空气质量', midX + 14, y0 + 26, 17, '700', light ? BLACK : WHITE);
+  txt(ctx, String(aq), midX + 14, y0 + 84, 48, '700', light ? BLACK : WHITE);
+  txt(ctx, 'AQI', midX + 14, y0 + 118, 15, '400', light ? BLACK : WHITE);
+  C(midX, y0 + 132, W - M, y1);
+  txt(ctx, `湿度 ${Math.round(w.hum ?? 0)}%`, midX + 14, y0 + 176, 19, '700');
+  txt(ctx, `体感 ${Math.round(w.feels ?? w.temp)}°`, midX + 14, y0 + 214, 19, '700');
+
+  const y2 = y1;
+  C(M, y2, M + 48, y2 + 156, BLUE);
+  '3天预报'.split('').forEach((ch, i) => txt(ctx, ch, M + 12, y2 + 34 + i * 30, 20, '700', WHITE));
+  const days = (w.daily3 || []).slice(0, 3);
+  const colw = Math.floor((W - M - (M + 48)) / 3);
+  for (let i = 0; i < 3; i++) C(M + 48 + i * colw, y2, M + 48 + (i + 1) * colw, y2 + 156);
+  days.forEach((day, i) => {
+    const cx = M + 48 + i * colw + colw / 2;
+    const ctr = (t, y, size, weight = '400') => txt(ctx, t, cx - tw(ctx, t, size, weight) / 2, y, size, weight);
+    ctr(day.label || '', y2 + 30, 18);
+    ctr(day.text || '', y2 + 76, 30, '700');
+    ctr(`${Math.round(day.lo)}～${Math.round(day.hi)}°`, y2 + 124, 20, '700');
+  });
+
+  const y3 = y2 + 156, halfX = M + Math.round((W - M * 2) * 0.5);
+  C(M, y3, halfX, y3 + 140, BLUE);
+  txt(ctx, '日出 / 日落', M + 14, y3 + 30, 20, '700', WHITE);
+  txt(ctx, w.sunrise || '--', M + 14, y3 + 76, 29, '700', WHITE);
+  txt(ctx, w.sunset || '--', M + 14, y3 + 122, 29, '700', WHITE);
+  C(halfX, y3, W - M, y3 + 140);
+  const tmr = days[1] || {};
+  txt(ctx, `明天 ${tmr.date || ''}`, halfX + 14, y3 + 30, 18);
+  txt(ctx, `${tmr.text || ''} ${Math.round(tmr.lo ?? 0)}—${Math.round(tmr.hi ?? 0)}℃`, halfX + 14, y3 + 72, 22, '700');
+  txt(ctx, `今日：${w.text || ''}`, halfX + 14, y3 + 120, 18);
+
+  const y4 = y3 + 140;
+  C(M, y4, W - M, y4 + 76, YELLOW);
+  txt(ctx, '穿衣参考', M + 14, y4 + 28, 20, '700');
+  const t = Number(w.temp);
+  const advice = t < 0 ? '气温很低，建议羽绒服、厚毛衣。' : t < 10 ? '气温较低，建议厚外套加毛衣。'
+    : t < 18 ? '天气偏凉，外套加长袖合适。' : t < 26 ? '温度舒适，长袖或薄外套即可。' : '天气较热，短袖出行。';
+  txt(ctx, advice, M + 14, y4 + 58, 16);
+
+  const y5 = y4 + 76;
+  if (y5 + 36 <= H - 16) {
+    C(M, y5, W - M, y5 + 36);
+    txt(ctx, '来源：Open-Meteo · 非实时更新', M + 14, y5 + 24, 14);
+  }
 }
