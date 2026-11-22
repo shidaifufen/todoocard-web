@@ -241,6 +241,10 @@ function renderPhotos() {
 }
 function pickPhoto() {
   if (!photos.length) return null;
+  if (st.photoMode === 'fav') {
+    const favs = (st.fav || []).map(id => photos.find(p => p.id === id)).filter(Boolean);
+    if (favs.length) return favs[Math.floor(Math.random() * favs.length)];
+  }
   if (st.photoMode === 'shuffle') {
     const used = JSON.parse(localStorage.getItem('todo-used') || '[]');
     let left = photos.filter((p) => !used.includes(p.id));
@@ -285,7 +289,29 @@ function renderParams() {
      <label>标题</label><input id="p_ctitle" value="${st.custom.title}">
      <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>
      <label>二维码内容（链接/文本，留空不画）</label><input id="p_cqr" value="${st.custom.qr || ''}" placeholder="https://github.com/...">`;
-  else if (k === 'photo') box.innerHTML = `<label>轮播方式</label><select id="p_mode"><option value="shuffle">洗牌不重复</option><option value="random">纯随机</option></select><div class="hint" style="margin-top:6px">在下方照片库添加照片</div>`;
+  else if (k === 'photo') {
+    const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true}, st.photoFields || {});
+    box.innerHTML = `<label>轮播方式</label><select id="p_mode">
+        <option value="shuffle">洗牌不重复</option>
+        <option value="random">纯随机</option>
+        <option value="fav">只推收藏</option></select>
+      <label style="margin-top:10px">信息带显示项（勾掉就不占高度）</label>
+      ${['date','time','camera','params','weather'].map(k2 =>
+        `<label style="display:inline-flex;gap:4px;margin-right:12px">
+           <input type="checkbox" data-pf="${k2}"${pf[k2]?' checked':''}>${{date:'日期',time:'时间',camera:'机身',params:'参数',weather:'天气'}[k2]}</label>`).join('')}
+      <div class="btnrow" style="margin-top:10px">
+        <button class="ghost" onclick="favPhoto()">☆ 收藏当前照片</button>
+        <button class="ghost" onclick="renderFavList()">查看收藏</button>
+      </div>
+      <div id="favList" class="hint" style="margin-top:8px"></div>`;
+    box.querySelectorAll('input[data-pf]').forEach(cb => {
+      cb.onchange = () => {
+        st.photoFields = st.photoFields || {};
+        box.querySelectorAll('input[data-pf]').forEach(x => st.photoFields[x.dataset.pf] = x.checked);
+        save(); draw();
+      };
+    });
+  }
   else box.innerHTML = `<div class="hint">这个模板不需要额外设置</div>`;
 
   const bind = (id, fn) => { const el = $(id); if (el) el.onchange = () => { fn(el.value); save(); draw(); }; };
@@ -343,9 +369,14 @@ function draw() {
     const img = new Image();
     photoReady = new Promise((res) => {
       img.onload = () => {
-        const e = p.exif;
-        const hasInfo = e && (e.taken || e.camera || e.params);
-        const band = hasInfo ? 78 : 0;
+        const e = p.exif || {};
+        const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true}, st.photoFields || {});
+        const line1 = [pf.date ? (e.taken || '') : '', pf.time ? (e.time || '') : ''].filter(Boolean).join('  ');
+        const line2 = [pf.camera ? (e.camera || '') : '', pf.params ? (e.params || '') : ''].filter(Boolean).join('  ');
+        const showWx = pf.weather && st.weather;
+        const hasInfo = !!(line1 || line2 || showWx);
+        const rows = (line1 ? 1 : 0) + (line2 ? 1 : 0);
+        const band = hasInfo ? (24 + rows * 26 + (showWx ? 20 : 0)) : 0;
         const ph = H - band;
         const s = Math.max(W / img.width, ph / img.height);
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
@@ -355,11 +386,14 @@ function draw() {
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
           ctx.beginPath(); ctx.moveTo(0, ph); ctx.lineTo(W, ph); ctx.stroke();
           ctx.fillStyle = '#000';
-          ctx.font = '700 22px "PingFang SC","Microsoft YaHei",sans-serif';
-          ctx.fillText(`${e.taken || ''} ${e.time || ''}`.trim() || '—', 32, ph + 32);
-          if (e.params) { ctx.font = '400 16px "PingFang SC",sans-serif'; ctx.fillText(e.params, 32, ph + 62); }
-          if (e.camera) { ctx.font = '400 15px "PingFang SC",sans-serif'; ctx.textAlign = 'right';
-            ctx.fillText(e.camera, W - 32, ph + 62); ctx.textAlign = 'left'; }
+          let yy = ph + 26;
+          if (line1) { ctx.font = '700 21px "PingFang SC","Microsoft YaHei",sans-serif'; ctx.fillText(line1, 32, yy); yy += 26; }
+          if (line2) { ctx.font = '400 16px "PingFang SC",sans-serif'; ctx.fillText(line2, 32, yy); yy += 24; }
+          if (showWx) {
+            ctx.font = '400 15px "PingFang SC",sans-serif'; ctx.textAlign = 'right';
+            ctx.fillText(`${Math.round(st.weather.temp)}° ${st.weather.text}`, W - 32, yy);
+            ctx.textAlign = 'left';
+          }
         }
         res();
       };
@@ -441,6 +475,21 @@ function renderSched() {
     };
   });
 }
+function favPhoto(){
+  const p = pickPhoto();
+  if (!p) return log('照片库是空的');
+  st.fav = st.fav || [];
+  if (!st.fav.includes(p.id)) st.fav.push(p.id);
+  save(); log('已收藏这张照片'); renderFavList();
+}
+function renderFavList(){
+  const box = $('favList'); if (!box) return;
+  const list = (st.fav || []).map(id => photos.find(p => p.id === id)).filter(Boolean);
+  box.innerHTML = list.length
+    ? '收藏：' + list.map(p => `<img src="${p.data}" style="width:36px;height:52px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:4px">`).join('')
+    : '还没有收藏';
+}
+
 function addSched() { (st.sched = st.sched || []).push({ time: '08:00', template: 'summary' }); save(); renderSched(); }
 function delSched(i) { st.sched.splice(i, 1); save(); renderSched(); }
 async function runSched(i) { st.template = st.sched[i].template; renderTabs(); renderParams(); draw(); await new Promise(r => setTimeout(r, 200)); sendNow(); }
