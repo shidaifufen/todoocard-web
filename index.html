@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#0f1116">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>土豆片 · 网页版</title>
 <style>
@@ -39,7 +41,7 @@
 </head>
 <body>
 <header>
-  <h1>土豆片 · 网页版</h1>
+  <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
   <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-11 b</b> · 定时任务需要页面保持打开</p>
 </header>
 
@@ -618,6 +620,16 @@ acquireDevice();
 loadPhotos().catch((e) => log('照片库不可用：' + (e?.message || e)));
 if (!st.weather && (st.template === 'weather' || st.template === 'summary')) fetchWeather();
 draw();
+</script>
+<script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+let _installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _installEvt = e;
+  const b = document.getElementById('installBtn'); if (b) b.style.display = 'inline-block'; });
+async function installApp(){
+  if (!_installEvt) { alert('请用 Chrome 菜单里的「添加到主屏幕」'); return; }
+  _installEvt.prompt(); _installEvt = null;
+}
 </script>
 </body>
 </html>
