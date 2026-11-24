@@ -12,7 +12,7 @@ export function bleSupported() {
   return 'bluetooth' in navigator;
 }
 
-export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null) {
+export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null, prepared = null) {
   if (!bleSupported()) throw new Error('这个浏览器不支持 Web Bluetooth，请用 Chrome / Edge');
 
   let device = reuse;
@@ -30,6 +30,10 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
 
   let ctrl = null, data = null, onAck;
   try {
+  if (prepared) {
+    if (prepared.device !== device || !device.gatt.connected) throw new Error('准备好的卡片连接已失效');
+    ({ ctrl, data } = prepared);
+  } else {
   log('旧版连接：枚举服务，控制指令使用 writeValue');
   const server = await device.gatt.connect();
   const services = await server.getPrimaryServices();
@@ -40,10 +44,11 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
       if (DATA.includes(u)) data = c;
     }
   }
+  }
   if (!ctrl || !data) throw new Error('没找到控制点/数据点特征值');
   log(`旧版选中控制特征：${ctrl.uuid}；数据特征：${data.uuid}`);
 
-  let blockSize = 0, ackEnd = false, error = '', acked = -1;
+  let blockSize = prepared?.blockSize || 0, ackEnd = false, error = '', acked = -1;
   onAck = (ev) => {
     const value = ev.target.value;
     const b = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -64,7 +69,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     }
   };
 
-  await ctrl.startNotifications();
+  if (!prepared?.subscribed) await ctrl.startNotifications();
   ctrl.addEventListener('characteristicvaluechanged', onAck);
   await new Promise((r) => setTimeout(r, 300));
 
@@ -78,7 +83,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     return false;
   };
 
-  await ctrl.writeValue(new Uint8Array([CMD_BLOCK]));
+  if (!prepared) await ctrl.writeValue(new Uint8Array([CMD_BLOCK]));
   if (!(await waitFor(() => blockSize > 0))) throw new Error('等不到 block size 响应');
   log(`block payload = ${blockSize} 字节`);
 
@@ -143,6 +148,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
       ctrl.removeEventListener('characteristicvaluechanged', onAck);
       if (device.gatt.connected) { try { await ctrl.stopNotifications(); } catch {} }
     }
-    try { device.gatt.disconnect(); } catch {}
+    if (prepared) await prepared.close();
+    else { try { device.gatt.disconnect(); } catch {} }
   }
 }

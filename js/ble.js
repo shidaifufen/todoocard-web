@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function requestCardDevice() {
   if (!bleSupported()) throw new Error('请在 HTTPS 页面使用 Chrome / Edge，当前浏览器不支持 Web Bluetooth');
   // 直接在点击事件中调用，避免生成图片期间丢失浏览器要求的用户手势。
-  return navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [...SVC] });
+  return navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [...SVC, 0x180f] });
 }
 
 function waitForGattConnection(device, timeoutMs) {

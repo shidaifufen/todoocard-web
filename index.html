@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 e · 传输回溯对比</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 f · 连接准备</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -59,6 +59,11 @@
     <div class="tabs" id="tabs"></div>
     <canvas id="cv" width="528" height="792"></canvas>
     <div class="row" style="margin-top:12px">
+      <button id="pair" class="ghost" onclick="pairNow()">配对 / 连接</button>
+    </div>
+    <p id="deviceState" class="hint">尚未选择卡片</p>
+    <p class="hint">选择卡片后完成浏览器或系统弹出的确认。只有收到卡片回执才显示验证通过。</p>
+    <div class="row" style="margin-top:12px">
       <button id="send" onclick="sendNow()" style="flex:1">连接并发送</button>
       <button id="scan" class="ghost" onclick="forceScan()" title="按名字找不到时用这个">扫描全部</button>
       <button class="ghost" onclick="rebuild()">重新生成</button>
@@ -67,7 +72,7 @@
       <label for="transferProfile" class="hint">传输版本</label>
       <select id="transferProfile" style="width:100%;margin-top:6px" aria-describedby="transferHelp"></select>
       <p id="transferHelp" class="hint" style="margin:6px 0"></p>
-      <p class="hint" style="margin:6px 0">先试 A。失败后可手动换 B、C 对比；切换版本不会重画当前预览。请把版本和完整日志一起反馈。</p>
+      <p class="hint" style="margin:6px 0">默认 D 会先完成连接验证。A/B/C 用于回溯对比；切换版本不会重画当前预览。请把版本和完整日志一起反馈。</p>
     </div>
     <div class="bar"><i id="prog"></i></div>
     <button id="diagnose" class="ghost" onclick="diagnoseNow()" style="margin-top:10px">诊断 C 版控制写入（不发送图片）</button>
@@ -112,8 +117,9 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261124a';
-import { diagnoseCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124e';
-import { sendWithProfile, TRANSFER_PROFILES } from './js/transfer-profiles.js?v=20261124e';
+import { diagnoseCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124f';
+import { verifyCardConnection } from './js/card-connection.js?v=20261124f';
+import { sendWithProfile, TRANSFER_PROFILES } from './js/transfer-profiles.js?v=20261124f';
 import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;
@@ -428,14 +434,14 @@ function draw() {
 const profileSelect = $('transferProfile');
 profileSelect.innerHTML = TRANSFER_PROFILES.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
 let savedProfile;
-try { savedProfile = localStorage.getItem('todoocard-ble-comparison-v1'); } catch {}
+try { savedProfile = localStorage.getItem('todoocard-ble-comparison-v2'); } catch {}
 const requestedProfile = new URLSearchParams(location.search).get('ble') || savedProfile;
-profileSelect.value = TRANSFER_PROFILES.some(p => p.id === requestedProfile) ? requestedProfile : 'legacy';
+profileSelect.value = TRANSFER_PROFILES.some(p => p.id === requestedProfile) ? requestedProfile : 'prepared';
 function describeProfile() {
   $('transferHelp').textContent = TRANSFER_PROFILES.find(p => p.id === profileSelect.value).description;
 }
 profileSelect.onchange = () => {
-  try { localStorage.setItem('todoocard-ble-comparison-v1', profileSelect.value); } catch {}
+  try { localStorage.setItem('todoocard-ble-comparison-v2', profileSelect.value); } catch {}
   describeProfile();
   log('已切换传输版本：' + TRANSFER_PROFILES.find(p => p.id === profileSelect.value).label);
 };
@@ -448,6 +454,7 @@ function setBluetoothBusy(busy) {
   bluetoothBusy = busy;
   $('send').disabled = busy;
   $('scan').disabled = busy;
+  $('pair').disabled = busy;
   $('diagnose').disabled = busy;
   $('transferProfile').disabled = busy;
 }
@@ -458,6 +465,27 @@ async function build() {
   log(`已生成 payload ${arts.payload.length} B（${(performance.now() - t0).toFixed(0)} ms）`);
   return arts;
 }
+function rememberCard(selected) {
+  device = selected;
+  try { localStorage.setItem('todoocard-device-id', selected.id); } catch {}
+  $('deviceState').textContent = '已选择 ' + (selected.name || selected.id) + '，尚未验证连接';
+}
+async function pairNow() {
+  if (bluetoothBusy) return;
+  if (!bleSupported()) return log('请使用 HTTPS 页面与 Chrome / Edge');
+  setBluetoothBusy(true);
+  try {
+    if (!device) rememberCard(await requestCardDevice());
+    const result = await verifyCardConnection(device, log, message => { $('deviceState').textContent = message; });
+    $('deviceState').textContent = '✅ ' + (device.name || device.id) + ' 连接验证通过（已释放连接）';
+    $('state').textContent = '可点击连接并发送；本次未发送图片';
+    return result.ok;
+  } catch (error) {
+    $('deviceState').textContent = '连接验证失败：' + error.message;
+    log('❌ ' + error.message);
+    return false;
+  } finally { setBluetoothBusy(false); }
+}
 async function forceScan() {
   if (bluetoothBusy) return log('正在连接或发送，请等待完成');
   if (!('bluetooth' in navigator)) return log('浏览器不支持 Web Bluetooth（iOS 全部不支持，请用安卓 Chrome）');
@@ -466,7 +494,7 @@ async function forceScan() {
     log('列出全部蓝牙设备…（安卓需要在系统里允许「附近的设备/位置」权限）');
     const d = await requestCardDevice();
     log('（若列表里都是「未知设备」，说明系统没扫到卡片：先确认桌面服务已暂停、卡片已唤醒）');
-    device = d;
+    rememberCard(d);
     log('已选择：' + (d.name || d.id) + '，现在点「连接并发送」');
   } catch (e) { log('❌ ' + (e?.message || e)); }
   finally { setBluetoothBusy(false); }
@@ -498,7 +526,7 @@ async function sendNow() {
   try {
     if (!device) {
       // 必须先弹授权选择器，再等待照片和生成 payload。
-      device = await requestCardDevice();
+      rememberCard(await requestCardDevice());
       log('已选择：' + (device.name || device.id));
     }
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
@@ -514,7 +542,7 @@ async function sendNow() {
     log('❌ ' + m);
     $('state').textContent = '发送失败：' + m;
     $('state').className = 'hint warn';
-    if (/Connection already in progress/i.test(m)) log('Edge 仍报告连接忙。请保留上面的具体失败阶段，等几秒重试，并检查是否有其他连接占用卡片');
+    if (/Connection already in progress/i.test(m)) log('连接或认证未完成；此错误尚不能确定是配对还是其他连接问题。请保留失败阶段和回执日志。');
     if (m.includes('disconnected') || m.includes('GATT')) log('提示：设备已断开，再点一次会重新连接');
     return false;
   } finally {
@@ -577,7 +605,14 @@ async function acquireDevice() {
     const bt = navigator.bluetooth;
     if (!bt || !bt.getDevices) return;
     const list = await bt.getDevices();
-    if (list?.length && !device && !bluetoothBusy) { device = list[0]; log('已恢复上次授权的设备：' + (device.name || device.id)); }
+    let savedId;
+    try { savedId = localStorage.getItem('todoocard-device-id'); } catch {}
+    const saved = list.find(d => d.id === savedId);
+    const candidates = list.filter(d => /^(ffff|todoo)/i.test(d.name || ''));
+    const selected = saved || (candidates.length === 1 ? candidates[0] : null);
+    if (selected && !device && !bluetoothBusy) {
+      rememberCard(selected); log('已恢复上次授权的设备：' + (device.name || device.id));
+    }
   } catch (e) { /* 忽略 */ }
 }
 
@@ -666,7 +701,7 @@ async function genNote() {
   } catch (e) { log('❌ 生成失败：' + (e?.message || e)); }
 }
 window.genNote = genNote;
-window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow; window.diagnoseNow = diagnoseNow;
+window.pairNow = pairNow; window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow; window.diagnoseNow = diagnoseNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();
