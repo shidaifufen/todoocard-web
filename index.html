@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 d</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 e · 传输回溯对比</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -63,8 +63,14 @@
       <button id="scan" class="ghost" onclick="forceScan()" title="按名字找不到时用这个">扫描全部</button>
       <button class="ghost" onclick="rebuild()">重新生成</button>
     </div>
+    <div style="margin-top:12px">
+      <label for="transferProfile" class="hint">传输版本</label>
+      <select id="transferProfile" style="width:100%;margin-top:6px" aria-describedby="transferHelp"></select>
+      <p id="transferHelp" class="hint" style="margin:6px 0"></p>
+      <p class="hint" style="margin:6px 0">先试 A。失败后可手动换 B、C 对比；切换版本不会重画当前预览。请把版本和完整日志一起反馈。</p>
+    </div>
     <div class="bar"><i id="prog"></i></div>
-    <button id="diagnose" class="ghost" onclick="diagnoseNow()" style="margin-top:10px">诊断已授权卡片（不发送图片）</button>
+    <button id="diagnose" class="ghost" onclick="diagnoseNow()" style="margin-top:10px">诊断 C 版控制写入（不发送图片）</button>
     <div style="margin-top:12px"><span class="hint" id="state">就绪</span></div>
     <div id="log" style="margin-top:8px">就绪</div>
   </section>
@@ -106,7 +112,8 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261124a';
-import { sendToCard, diagnoseCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124d';
+import { diagnoseCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124e';
+import { sendWithProfile, TRANSFER_PROFILES } from './js/transfer-profiles.js?v=20261124e';
 import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;
@@ -417,6 +424,23 @@ function draw() {
   return T.drawQuote(ctx, view);
 }
 
+// ── 传输版本 ──
+const profileSelect = $('transferProfile');
+profileSelect.innerHTML = TRANSFER_PROFILES.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+let savedProfile;
+try { savedProfile = localStorage.getItem('todoocard-ble-comparison-v1'); } catch {}
+const requestedProfile = new URLSearchParams(location.search).get('ble') || savedProfile;
+profileSelect.value = TRANSFER_PROFILES.some(p => p.id === requestedProfile) ? requestedProfile : 'legacy';
+function describeProfile() {
+  $('transferHelp').textContent = TRANSFER_PROFILES.find(p => p.id === profileSelect.value).description;
+}
+profileSelect.onchange = () => {
+  try { localStorage.setItem('todoocard-ble-comparison-v1', profileSelect.value); } catch {}
+  describeProfile();
+  log('已切换传输版本：' + TRANSFER_PROFILES.find(p => p.id === profileSelect.value).label);
+};
+describeProfile();
+
 // ── 发送 ──
 let device = null;
 let bluetoothBusy = false;
@@ -425,6 +449,7 @@ function setBluetoothBusy(busy) {
   $('send').disabled = busy;
   $('scan').disabled = busy;
   $('diagnose').disabled = busy;
+  $('transferProfile').disabled = busy;
 }
 let photoReady = Promise.resolve();   // 预览那张图加载完成的信号，发送前等它
 async function build() {
@@ -479,10 +504,10 @@ async function sendNow() {
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
     if (st.template === 'photo') await photoReady;
     const arts = await build();
-    const res = await sendToCard(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%', device);
+    const res = await sendWithProfile(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%', device, $('transferProfile').value);
     device = res.device || device;   // 记住设备，定时任务复用（否则每次都要人点）
-    $('state').textContent = res.acked ? '✅ 已确认' : '✅ 已写完（未确认）';
-    $('state').className = 'hint';
+    $('state').textContent = res.acked ? '✅ 已确认' : '⚠️ 已写完，未收到显影确认';
+    $('state').className = res.acked ? 'hint' : 'hint warn';
     return res.ok;
   } catch (e) {
     const m = String(e?.message || e);

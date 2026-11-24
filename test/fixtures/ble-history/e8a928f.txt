@@ -1,0 +1,107 @@
+// Web Bluetooth 发送：与桌面版 sender.py 同一套握手。
+// 只支持 Chrome / Edge（含安卓版），Safari / Firefox 没有 Web Bluetooth。
+
+const SVC = [0xfef0, 0xfdf0];
+const CTRL = [0xfef1, 0xfdf1];
+const DATA = [0xfef2, 0xfdf2];
+const CMD_BLOCK = 0x01, CMD_LEN = 0x02, CMD_START = 0x03, CMD_ACK = 0x05;
+
+export function bleSupported() {
+  return 'bluetooth' in navigator;
+}
+
+export async function sendToCard(payload, log = console.log, onProgress = () => {}) {
+  if (!bleSupported()) throw new Error('这个浏览器不支持 Web Bluetooth，请用 Chrome / Edge');
+
+  log('选择设备…');
+  const device = await navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: [...SVC],
+  });
+  log(`已选择：${device.name || device.id}`);
+
+  const server = await device.gatt.connect();
+  const services = await server.getPrimaryServices();
+  let ctrl = null, data = null;
+  for (const s of services) {
+    for (const c of await s.getCharacteristics()) {
+      const u = parseInt(c.uuid.slice(4, 8), 16);
+      if (CTRL.includes(u)) ctrl = c;
+      if (DATA.includes(u)) data = c;
+    }
+  }
+  if (!ctrl || !data) throw new Error('没找到控制点/数据点特征值');
+
+  let blockSize = 0, ackEnd = false, error = '';
+  const onAck = (ev) => {
+    const b = new Uint8Array(ev.target.value.buffer);
+    log('control ← ' + [...b].map((x) => x.toString(16).padStart(2, '0')).join(' '));
+    if (!b.length) return;
+    if (b[0] === CMD_BLOCK) {
+      if (b.length >= 3 && b[2] === 0) blockSize = Math.max(0, b[1] - 4);
+      else error = '设备拒绝了 block size';
+    } else if (b[0] === CMD_LEN) {
+      if (b[1] !== 0) error = '设备拒绝了 payload 长度';
+    } else if (b[0] === CMD_ACK) {
+      if (b[1] === 0x08) ackEnd = true;
+      else if (b[1] !== 0) error = '设备返回错误 0x' + b[1].toString(16);
+    }
+  };
+
+  await ctrl.startNotifications();
+  ctrl.addEventListener('characteristicvaluechanged', onAck);
+  await new Promise((r) => setTimeout(r, 300));
+
+  const waitFor = async (pred, ms = 5000) => {
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      if (error) throw new Error(error);
+      if (pred()) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  };
+
+  await ctrl.writeValue(new Uint8Array([CMD_BLOCK]));
+  if (!(await waitFor(() => blockSize > 0))) throw new Error('等不到 block size 响应');
+  log(`block payload = ${blockSize} 字节`);
+
+  let buf = payload;
+  if (buf.length % blockSize) {
+    const pad = blockSize - (buf.length % blockSize);
+    const nb = new Uint8Array(buf.length + pad);
+    nb.set(buf); buf = nb;
+  }
+  const n = buf.length / blockSize;
+  log(`共 ${n} 块`);
+
+  const lenBytes = new Uint8Array([CMD_LEN, buf.length & 0xff, (buf.length >> 8) & 0xff, (buf.length >> 16) & 0xff]);
+  await ctrl.writeValue(lenBytes);
+  await new Promise((r) => setTimeout(r, 200));
+  await ctrl.writeValue(new Uint8Array([CMD_START]));
+
+  for (let i = 0; i < n; i++) {
+    const packet = new Uint8Array(4 + blockSize);
+    packet[0] = i & 0xff; packet[1] = (i >> 8) & 0xff;
+    packet[2] = (i >> 16) & 0xff; packet[3] = (i >> 24) & 0xff;
+    packet.set(buf.subarray(i * blockSize, (i + 1) * blockSize), 4);
+    await data.writeValueWithoutResponse(packet);
+    if (error) throw new Error(error);
+    if ((i + 1) % 32 === 0) {
+      onProgress((i + 1) / n);
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    if ((i + 1) % 256 === 0) log(`已发送 ${i + 1}/${n} 块`);
+  }
+
+  log('数据写完，等显影确认…');
+  if (!(await waitFor(() => ackEnd, 20000))) {
+    log('⚠️ 没收到显影确认（0x05 0x08）：画面可能已经刷新，也可能失败');
+  } else {
+    log('✅ 显影确认已收到');
+  }
+  onProgress(1);
+  try { await ctrl.stopNotifications(); } catch (e) { /* ignore */ }
+  try { device.gatt.disconnect(); } catch (e) { /* ignore */ }
+  return { ok: true, acked: ackEnd, blocks: n };
+}

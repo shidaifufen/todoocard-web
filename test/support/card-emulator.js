@@ -1,15 +1,16 @@
 // A strict peripheral state machine, not a physical Bluetooth adapter. Used by
 // Node and the isolated Edge harness to verify protocol bytes and full packets.
-export function emulateCard(payload, { busyWrites = 2, busyCommand = 1, failCommand = 0, controlMode = 'write' } = {}) {
+export function emulateCard(payload, { busyWrites = 2, busyCommand = 1, failCommand = 0, controlMode = 'write', notificationOffset = true, ackDelayMs = 0, maxUnacked = Infinity } = {}) {
   const events = new Map(), deviceEvents = new Map();
-  const stats = { commands: [], packets: [], busy: 0, connected: false, stops: 0, confirmed: false, writeMethods: [] };
-  let phase = 'connected', expectedLength = 0;
+  const stats = { commands: [], packets: [], busy: 0, connected: false, stops: 0, confirmed: false, writeMethods: [], dataMethods: [], discoveries: [] };
+  let phase = 'connected', expectedLength = 0, acknowledged = -1;
   const fail = message => { throw new Error('Emulator: ' + message); };
   const notify = bytes => {
-    const storage = Uint8Array.from([0xaa, ...bytes, 0xbb]);
-    events.get('characteristicvaluechanged')?.({ target: { value: new DataView(storage.buffer, 1, bytes.length) } });
+    const storage = Uint8Array.from(notificationOffset ? [0xaa, ...bytes, 0xbb] : bytes);
+    events.get('characteristicvaluechanged')?.({ target: { value: new DataView(storage.buffer, notificationOffset ? 1 : 0, bytes.length) } });
   };
   const ctrl = {
+    uuid: '0000fef1-0000-1000-8000-00805f9b34fb',
     properties: { write: controlMode === 'write', writeWithoutResponse: controlMode === 'writeWithoutResponse', notify: true },
     addEventListener: (type, fn) => events.set(type, fn),
     removeEventListener: type => events.delete(type),
@@ -46,17 +47,30 @@ export function emulateCard(payload, { busyWrites = 2, busyCommand = 1, failComm
     stats.writeMethods.push('withoutResponse'); return acceptControl(bytes);
   };
   const data = {
+    uuid: '0000fef2-0000-1000-8000-00805f9b34fb',
     writeValueWithResponse: async packet => {
       if (phase !== 'sending' || packet.length !== 244) fail('data before start or incorrect packet size');
       const index = new DataView(packet.buffer, packet.byteOffset, packet.byteLength).getUint32(0, true);
       if (index !== stats.packets.length) fail('skipped or duplicate block');
+      if (index - acknowledged > maxUnacked) fail('peripheral receive buffer overflow');
       for (let i = 0; i < 240; i++) if (packet[i + 4] !== (payload[index * 240 + i] ?? 0)) fail('payload/padding mismatch');
       stats.packets.push(index);
-      if ((index + 1) % 16 === 0) notify([5, 0, index & 255, (index >>> 8) & 255, (index >>> 16) & 255, (index >>> 24) & 255]);
+      if ((index + 1) % 16 === 0) {
+        const ack = () => { acknowledged = index; notify([5, 0, index & 255, (index >>> 8) & 255, (index >>> 16) & 255, (index >>> 24) & 255]); };
+        if (ackDelayMs) setTimeout(ack, ackDelayMs); else ack();
+      }
       if ((index + 1) * 240 === expectedLength) {
         phase = 'done'; stats.confirmed = true; notify([5, 8]);
       }
     },
+  };
+  const acceptData = data.writeValueWithResponse;
+  data.writeValueWithResponse = async packet => { stats.dataMethods.push('withResponse'); return acceptData(packet); };
+  data.writeValueWithoutResponse = async packet => { stats.dataMethods.push('withoutResponse'); return acceptData(packet); };
+  const service = {
+    uuid: '0000fef0-0000-1000-8000-00805f9b34fb',
+    getCharacteristics: async () => [ctrl, data],
+    getCharacteristic: async id => id === 0xfef1 ? ctrl : id === 0xfef2 ? data : fail('unexpected characteristic'),
   };
   const device = {
     id: 'simulated-card', name: 'SIMULATED FFFF99803901',
@@ -66,11 +80,13 @@ export function emulateCard(payload, { busyWrites = 2, busyCommand = 1, failComm
       connected: false,
       connect: async () => { device.gatt.connected = stats.connected = true; return device.gatt; },
       disconnect: () => { device.gatt.connected = stats.connected = false; deviceEvents.get('gattserverdisconnected')?.(); },
+      getPrimaryServices: async () => { stats.discoveries.push('enumerate'); return [service]; },
       getPrimaryService: async id => {
+        stats.discoveries.push('specific');
         if (id !== 0xfef0) fail('unexpected service');
-        return { getCharacteristic: async id => id === 0xfef1 ? ctrl : id === 0xfef2 ? data : fail('unexpected characteristic') };
+        return service;
       },
     },
   };
-  return { device, stats };
+  return { device, stats, ctrl, data, service };
 }

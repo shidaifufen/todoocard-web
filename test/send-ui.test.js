@@ -8,7 +8,7 @@ const source = html.split('// ── 发送 ──')[1].split('// ── 定时 
 function page({ send, select } = {}) {
   const nodes = new Map(), logs = [], calls = [];
   const element = id => {
-    if (!nodes.has(id)) nodes.set(id, { disabled: false, style: {}, textContent: '' });
+    if (!nodes.has(id)) nodes.set(id, { disabled: false, style: {}, textContent: '', value: 'legacy' });
     return nodes.get(id);
   };
   const context = vm.createContext({
@@ -17,7 +17,7 @@ function page({ send, select } = {}) {
     navigator: { bluetooth: {} }, bleSupported: () => true,
     buildPayloads: () => { calls.push('build'); return { payload: new Uint8Array(240) }; },
     requestCardDevice: async () => { calls.push('select'); return select ? select() : { id: 'card' }; },
-    sendToCard: async (...args) => { calls.push('send'); return send ? send(...args) : { ok: true, acked: true }; },
+    sendWithProfile: async (...args) => { calls.push('send'); return send ? send(...args) : { ok: true, acked: true }; },
   });
   vm.runInContext(source, context);
   return { context, nodes, logs, calls, run: () => vm.runInContext('sendNow()', context) };
@@ -56,4 +56,19 @@ test('cancelled chooser restores both controls without building a payload', asyn
   assert.deepEqual(ui.calls, ['select']);
   assert.equal(ui.nodes.get('send').disabled, false);
   assert.equal(ui.nodes.get('scan').disabled, false);
+});
+
+test('chosen profile is forwarded, frozen during send, and unconfirmed writes show a warning', async () => {
+  let chosen;
+  const ui = page({ send: async (...args) => {
+    chosen = args[4];
+    assert.equal(ui.nodes.get('transferProfile').disabled, true);
+    return { ok: true, acked: false };
+  } });
+  ui.context.$('transferProfile').value = 'discovery';
+  await ui.run();
+  assert.equal(chosen, 'discovery');
+  assert.equal(ui.nodes.get('transferProfile').disabled, false);
+  assert.match(ui.nodes.get('state').textContent, /未收到显影确认/);
+  assert.equal(ui.nodes.get('state').className, 'hint warn');
 });

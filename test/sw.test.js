@@ -46,6 +46,6 @@ test('offline versioned module uses the shell cache, missing script never become
 test('activation removes only this app caches, and other project requests are ignored', async () => {
   const sw = worker(async () => new Response('fresh'));
   await sw.activate();
-  assert.deepEqual(sw.deleted, ['todo-shell-v1']);
+  assert.deepEqual(sw.deleted, ['todo-shell-v1', 'todoocard-web-shell-v2']);
   assert.equal(await sw.get('../another-project/js/app.js'), undefined);
 });

@@ -1,0 +1,51 @@
+[
+  {
+    "revision": "e8a928f",
+    "sha256": "2a8c513d1da0c245520c6ce02bf56c2022647894468d177f713387aed8d294f9",
+    "controlMethod": "deprecated",
+    "discovery": "enumerate",
+    "dataMethod": "withoutResponse"
+  },
+  {
+    "revision": "ddc9fcf",
+    "sha256": "0f8f7db6fcb26a1b3b50c3412384120d1afc1d02a2929b0719a929d88e15098d",
+    "controlMethod": "deprecated",
+    "discovery": "enumerate",
+    "dataMethod": "withoutResponse"
+  },
+  {
+    "revision": "98113b9",
+    "sha256": "f4417df1968373d662d9384e48fe24655ad76a66471b34d97546ae32f6b23a0a",
+    "controlMethod": "deprecated",
+    "discovery": "enumerate",
+    "dataMethod": "withResponse"
+  },
+  {
+    "revision": "7b79971",
+    "sha256": "8e70744005e3191745f2e5a910b7093c53aed6eb5a6510ee4a398459f957e06f",
+    "controlMethod": "deprecated",
+    "discovery": "enumerate",
+    "dataMethod": "withResponse"
+  },
+  {
+    "revision": "1e5a657",
+    "sha256": "6f577fb86bca96a47e9c9f407b81587edd6ee344291e812ac50ae0a11e0b3964",
+    "controlMethod": "deprecated",
+    "discovery": "enumerate",
+    "dataMethod": "withResponse"
+  },
+  {
+    "revision": "f175352",
+    "sha256": "06472c3f4d6ee3b9158b20b7fc2c236cc1635cd3f7a414d761107d0b24507df0",
+    "controlMethod": "deprecated",
+    "discovery": "specific",
+    "dataMethod": "withResponse"
+  },
+  {
+    "revision": "7aeca4a",
+    "sha256": "dc75a5bfe8d18d17743fcbfb498a319183af2b49f2eea490410f86e5d1a99f00",
+    "controlMethod": "withResponse",
+    "discovery": "specific",
+    "dataMethod": "withResponse"
+  }
+]

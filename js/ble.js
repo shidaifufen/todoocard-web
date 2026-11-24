@@ -136,7 +136,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   return withCardLock(() => transfer(payload, log, onProgress, reuse));
 }
 
-async function withCardLock(operation) {
+export async function withCardLock(operation) {
   if (transferActive) throw new Error('正在发送上一张卡片，请等待完成后再试');
   transferActive = true;
   try {

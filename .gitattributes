@@ -1,0 +1,2 @@
+# Preserve historical source bytes: SHA-256 is checked by the comparison tests.
+test/fixtures/ble-history/*.txt -text
