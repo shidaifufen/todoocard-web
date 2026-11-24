@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 c</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 d</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -64,6 +64,7 @@
       <button class="ghost" onclick="rebuild()">重新生成</button>
     </div>
     <div class="bar"><i id="prog"></i></div>
+    <button id="diagnose" class="ghost" onclick="diagnoseNow()" style="margin-top:10px">诊断已授权卡片（不发送图片）</button>
     <div style="margin-top:12px"><span class="hint" id="state">就绪</span></div>
     <div id="log" style="margin-top:8px">就绪</div>
   </section>
@@ -105,7 +106,7 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261124a';
-import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124c';
+import { sendToCard, diagnoseCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124d';
 import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;
@@ -423,6 +424,7 @@ function setBluetoothBusy(busy) {
   bluetoothBusy = busy;
   $('send').disabled = busy;
   $('scan').disabled = busy;
+  $('diagnose').disabled = busy;
 }
 let photoReady = Promise.resolve();   // 预览那张图加载完成的信号，发送前等它
 async function build() {
@@ -442,6 +444,23 @@ async function forceScan() {
     device = d;
     log('已选择：' + (d.name || d.id) + '，现在点「连接并发送」');
   } catch (e) { log('❌ ' + (e?.message || e)); }
+  finally { setBluetoothBusy(false); }
+}
+
+async function diagnoseNow() {
+  if (bluetoothBusy) return;
+  setBluetoothBusy(true);
+  try {
+    if (!device && navigator.bluetooth?.getDevices) {
+      const cards = (await navigator.bluetooth.getDevices()).filter(d => /^ffff|todoo/i.test(d.name || ''));
+      if (cards.length === 1) device = cards[0];
+    }
+    if (!device) throw new Error('请先用扫描全部选择卡片，再点击诊断');
+    $('state').textContent = '正在真机诊断控制写入…';
+    log('开始真机诊断：' + (device.name || device.id));
+    const result = await diagnoseCard(device, log);
+    $('state').textContent = result.ok ? '诊断通过，可点击连接并发送验证图片' : '诊断未通过，请查看两种写入方式的日志';
+  } catch (e) { log('诊断失败：' + (e.message || e)); $('state').textContent = '诊断失败：' + (e.message || e); }
   finally { setBluetoothBusy(false); }
 }
 
@@ -622,7 +641,7 @@ async function genNote() {
   } catch (e) { log('❌ 生成失败：' + (e?.message || e)); }
 }
 window.genNote = genNote;
-window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
+window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow; window.diagnoseNow = diagnoseNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();

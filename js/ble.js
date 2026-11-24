@@ -11,6 +11,7 @@ export function bleSupported() {
 }
 
 let transferActive = false;
+const testedControlModes = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function requestCardDevice() {
@@ -59,13 +60,13 @@ export async function connectCard(device, log = console.log) {
 
 const isGattBusy = error => /connection already in progress|gatt operation already in progress/i.test(String(error?.message || error));
 
-async function writeControl(ctrl, bytes, stage, log, retries = 4) {
+async function writeControl(ctrl, bytes, stage, log, retries = 4, preferred = null) {
   // Select the same ATT write type from advertised properties explicitly.
   // Avoid the deprecated writeValue default path on current Edge/Chrome.
-  const method = ctrl.properties?.write && typeof ctrl.writeValueWithResponse === 'function'
+  const method = preferred || (ctrl.properties?.write && typeof ctrl.writeValueWithResponse === 'function'
     ? 'writeValueWithResponse'
     : ctrl.properties?.writeWithoutResponse && typeof ctrl.writeValueWithoutResponse === 'function'
-      ? 'writeValueWithoutResponse' : 'writeValue';
+      ? 'writeValueWithoutResponse' : 'writeValue');
   for (let attempt = 0; ; attempt++) {
     try { return await ctrl[method](bytes); }
     catch (error) {
@@ -132,19 +133,70 @@ async function discoverCard(device, log) {
 }
 
 export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null) {
+  return withCardLock(() => transfer(payload, log, onProgress, reuse));
+}
+
+async function withCardLock(operation) {
   if (transferActive) throw new Error('正在发送上一张卡片，请等待完成后再试');
   transferActive = true;
   try {
     if (navigator.locks?.request) {
       return await navigator.locks.request('todoocard-web-bluetooth', { ifAvailable: true }, async (lock) => {
         if (!lock) throw new Error('另一个土豆片网页正在连接或发送，请等待完成，或关闭其他标签页后重试');
-        return transfer(payload, log, onProgress, reuse);
+        return operation();
       });
     }
-    return await transfer(payload, log, onProgress, reuse);
+    return await operation();
   } finally {
     transferActive = false;
   }
+}
+
+export async function diagnoseCard(device, log = console.log) {
+  return withCardLock(async () => {
+    let ctrl, listener;
+    try {
+      ({ ctrl } = await discoverCard(device, log));
+      let reply = null;
+      listener = event => {
+        const v = event.target.value;
+        reply = new Uint8Array(v.buffer, v.byteOffset, v.byteLength).slice();
+        log('诊断通知 ← ' + [...reply].map(x => x.toString(16).padStart(2, '0')).join(' '));
+      };
+      ctrl.addEventListener('characteristicvaluechanged', listener);
+      await gattReady(() => ctrl.startNotifications(), '开启诊断通知', log);
+      await sleep(500);
+      const results = [];
+      testedControlModes.delete(device.id);
+      for (const [property, method] of [['write', 'writeValueWithResponse'], ['writeWithoutResponse', 'writeValueWithoutResponse']]) {
+        if (!ctrl.properties?.[property] || typeof ctrl[method] !== 'function') continue;
+        reply = null;
+        log(`诊断 ${method}：只查询分块大小（01），不发送图片`);
+        let error = '';
+        try { await ctrl[method](new Uint8Array([CMD_BLOCK])); }
+        catch (e) { error = `${e.name}: ${e.message}`; log(`${method} 写入被拒：${error}`); }
+        const end = performance.now() + (error ? 500 : 3000);
+        while (!reply && performance.now() < end) await sleep(50);
+        const confirmed = reply?.length >= 3 && reply[0] === CMD_BLOCK && reply[2] === 0 && reply[1] > 4;
+        results.push({ method, error, confirmed: !!confirmed });
+        log(`${method} 结果：${confirmed ? '收到卡片实际分块回执' : '未收到有效分块回执'}`);
+        if (confirmed && !error) {
+          testedControlModes.set(device.id, method);
+          log(`✅ 已实测控制写入方式：${method}，本页后续发送将采用此方式`);
+          return { ok: true, device, results, method };
+        }
+        await sleep(400);
+      }
+      log('诊断结束：两种控制写入均未得到可用回执，未发送图片');
+      return { ok: false, device, results };
+    } finally {
+      if (ctrl && listener) {
+        ctrl.removeEventListener('characteristicvaluechanged', listener);
+        if (device.gatt.connected) { try { await ctrl.stopNotifications(); } catch {} }
+      }
+      try { device.gatt.disconnect(); } catch {}
+    }
+  });
 }
 
 async function transfer(payload, log, onProgress, reuse) {
@@ -209,7 +261,9 @@ async function transfer(payload, log, onProgress, reuse) {
 
   log('状态通知已就绪，正在请求分块大小…');
   log(`控制特征写入能力：write=${!!ctrl.properties?.write}，writeWithoutResponse=${!!ctrl.properties?.writeWithoutResponse}`);
-  await writeControl(ctrl, new Uint8Array([CMD_BLOCK]), '请求分块大小', log);
+  const controlMode = testedControlModes.get(device.id);
+  if (controlMode) log(`采用本页实测通过的写入方式：${controlMode}`);
+  await writeControl(ctrl, new Uint8Array([CMD_BLOCK]), '请求分块大小', log, 4, controlMode);
   if (!(await waitFor(() => blockSize > 0))) throw new Error('等不到 block size 响应');
   log(`block payload = ${blockSize} 字节`);
 
@@ -223,9 +277,9 @@ async function transfer(payload, log, onProgress, reuse) {
   log(`共 ${n} 块`);
 
   const lenBytes = new Uint8Array([CMD_LEN, buf.length & 0xff, (buf.length >> 8) & 0xff, (buf.length >> 16) & 0xff]);
-  await writeControl(ctrl, lenBytes, '发送图片长度', log);
+  await writeControl(ctrl, lenBytes, '发送图片长度', log, 4, controlMode);
   await new Promise((r) => setTimeout(r, 200));
-  await writeControl(ctrl, new Uint8Array([CMD_START]), '开始传输', log, 0);
+  await writeControl(ctrl, new Uint8Array([CMD_START]), '开始传输', log, 0, controlMode);
 
   // 关键：按设备的逐块回执做流控。写太快会把设备缓冲灌爆，
   // 表现就是 "GATT Service no longer exists"（设备端直接重启/掉线）。
