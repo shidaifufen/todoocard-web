@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 a</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 b</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -105,7 +105,7 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261124a';
-import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124a';
+import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124b';
 import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;

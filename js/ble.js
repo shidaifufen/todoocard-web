@@ -57,6 +57,57 @@ export async function connectCard(device, log = console.log) {
   }
 }
 
+const isGattBusy = error => /connection already in progress|gatt operation already in progress/i.test(String(error?.message || error));
+
+// On Windows, connect() can resolve before service discovery has settled. Retry
+// reads on the current connection first; never replay image writes here.
+async function gattReady(operation, stage, log) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      if (!isGattBusy(error) || attempt === 2) {
+        const failure = new Error(`${stage}失败：${error?.message || error}`, { cause: error });
+        failure.name = error?.name || 'Error';
+        throw failure;
+      }
+      log(`${stage}时蓝牙连接仍在准备，稍后重试…（${attempt + 1}/2）`);
+      await sleep(500 * (attempt + 1));
+    }
+  }
+}
+
+async function discoverCard(device, log) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const server = await connectCard(device, log);
+      log(`已连接，正在准备卡片服务…（${attempt + 1}/3）`);
+      await sleep(350);
+      // Only access the two services explicitly authorized in the chooser.
+      // Enumerating all device services needlessly expands Windows discovery.
+      for (let i = 0; i < SVC.length; i++) {
+        const id = '0x' + SVC[i].toString(16);
+        try {
+          log(`查找卡片服务 ${id}…`);
+          const service = await gattReady(() => server.getPrimaryService(SVC[i]), `查找服务 ${id}`, log);
+          const ctrl = await gattReady(() => service.getCharacteristic(CTRL[i]), '查找控制特征', log);
+          const data = await gattReady(() => service.getCharacteristic(DATA[i]), '查找数据特征', log);
+          log(`卡片服务 ${id} 与控制 / 数据特征已就绪`);
+          return { ctrl, data };
+        } catch (error) {
+          if (error.name !== 'NotFoundError') throw error;
+        }
+      }
+      throw new Error('没找到卡片服务或控制 / 数据特征，请确认选中的是土豆片设备');
+    } catch (error) {
+      const retryable = isGattBusy(error) || error.name === 'NetworkError';
+      if (!retryable || attempt === 2) throw error;
+      try { device.gatt.disconnect(); } catch { /* Already disconnected. */ }
+      log('服务发现尚未就绪，已释放本次连接，将重新连接并查找…');
+      await sleep(750 * (attempt + 1));
+    }
+  }
+}
+
 export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null) {
   if (transferActive) throw new Error('正在发送上一张卡片，请等待完成后再试');
   transferActive = true;
@@ -92,18 +143,8 @@ async function transfer(payload, log, onProgress, reuse) {
   device.addEventListener('gattserverdisconnected', onDisconnect);
   let onAck;
   try {
-  const server = await connectCard(device, log);
+  ({ ctrl, data } = await discoverCard(device, log));
   disconnected = false;
-  log('已连接，正在发现卡片服务…');
-  const services = await server.getPrimaryServices();
-  for (const s of services) {
-    for (const c of await s.getCharacteristics()) {
-      const u = parseInt(c.uuid.slice(4, 8), 16);
-      if (CTRL.includes(u)) ctrl = c;
-      if (DATA.includes(u)) data = c;
-    }
-  }
-  if (!ctrl || !data) throw new Error('没找到控制点/数据点特征值');
 
   let blockSize = 0, ackEnd = false, error = '', acked = -1;
   onAck = (ev) => {
@@ -128,7 +169,8 @@ async function transfer(payload, log, onProgress, reuse) {
 
   ctrl.addEventListener('characteristicvaluechanged', onAck);
   listening = true;
-  await ctrl.startNotifications();
+  log('正在开启卡片状态通知…');
+  await gattReady(() => ctrl.startNotifications(), '开启状态通知', log);
   await new Promise((r) => setTimeout(r, 300));
 
   const waitFor = async (pred, ms = 5000) => {
@@ -142,6 +184,7 @@ async function transfer(payload, log, onProgress, reuse) {
     return false;
   };
 
+  log('状态通知已就绪，正在请求分块大小…');
   await ctrl.writeValue(new Uint8Array([CMD_BLOCK]));
   if (!(await waitFor(() => blockSize > 0))) throw new Error('等不到 block size 响应');
   log(`block payload = ${blockSize} 字节`);

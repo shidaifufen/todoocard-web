@@ -4,13 +4,17 @@ import { connectCard, sendToCard } from '../js/ble.js';
 
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { bluetooth: {} } });
 
-function fixture({ connectFailures = 0, delayedConnect = false, serviceError = false, dataError = false, offset = false } = {}) {
-  const state = { connects: 0, disconnects: 0, stops: 0, writes: [], listeners: new Map() };
+function fixture({ connectFailures = 0, delayedConnect = false, serviceError = false, dataError = false, offset = false,
+  serviceBusy = 0, characteristicBusy = 0, notificationBusy = 0, variant = 0 } = {}) {
+  const state = { connects: 0, disconnects: 0, stops: 0, writes: [], listeners: new Map(),
+    services: 0, characteristics: 0, notifications: 0, servicesRequested: [], writesAtConnect: [] };
   const ctrl = {
     uuid: '0000fef1-0000-1000-8000-00805f9b34fb',
     addEventListener: (name, listener) => state.listeners.set(name, listener),
     removeEventListener: (name) => state.listeners.delete(name),
-    startNotifications: async () => {},
+    startNotifications: async () => {
+      if (++state.notifications <= notificationBusy) throw new Error('Connection already in progress.');
+    },
     stopNotifications: async () => { state.stops++; },
     writeValue: async (bytes) => {
       state.writes.push([...bytes]);
@@ -37,6 +41,7 @@ function fixture({ connectFailures = 0, delayedConnect = false, serviceError = f
       connected: false,
       connect: async () => {
         state.connects++;
+        state.writesAtConnect.push(state.writes.length);
         if (delayedConnect && state.connects === 1) {
           setTimeout(() => {
             device.gatt.connected = true;
@@ -53,9 +58,19 @@ function fixture({ connectFailures = 0, delayedConnect = false, serviceError = f
         device.gatt.connected = false;
         state.listeners.get('gattserverdisconnected')?.();
       },
-      getPrimaryServices: async () => {
+      getPrimaryServices: async () => { throw new Error('Must not enumerate unrelated services'); },
+      getPrimaryService: async uuid => {
+        state.services++;
+        state.servicesRequested.push(uuid);
         if (serviceError) throw new Error('Service discovery failed');
-        return [{ getCharacteristics: async () => [ctrl, data] }];
+        if (state.services <= serviceBusy) throw new Error('Connection already in progress.');
+        if (uuid !== [0xfef0, 0xfdf0][variant]) throw Object.assign(new Error('No matching service'), { name: 'NotFoundError' });
+        return { getCharacteristic: async uuid => {
+          if (++state.characteristics <= characteristicBusy) throw new Error('GATT operation already in progress.');
+          if (uuid === [0xfef1, 0xfdf1][variant]) return ctrl;
+          if (uuid === [0xfef2, 0xfdf2][variant]) return data;
+          throw new Error('Unexpected characteristic');
+        } };
       },
     },
   };
@@ -125,4 +140,55 @@ test('a different tab holding the Web Lock prevents GATT access', async () => {
     await assert.rejects(sendToCard(new Uint8Array(240), quiet, quiet, device), /另一个土豆片网页/);
     assert.equal(state.connects, 0);
   } finally { delete navigator.locks; }
+});
+
+test('Edge service discovery pending after connect retries without image writes or reconnect', async () => {
+  const { device, state } = fixture({ serviceBusy: 2 });
+  const logs = [];
+  const result = await sendToCard(new Uint8Array(240), s => logs.push(s), quiet, device);
+  assert.equal(result.acked, true);
+  assert.equal(state.connects, 1);
+  assert.equal(state.services, 3);
+  assert.deepEqual(state.writesAtConnect, [0]);
+  assert.deepEqual(state.writes, [[1], [2, 240, 0, 0], [3]]);
+  assert.ok(logs.some(s => s.includes('查找服务 0xfef0时')));
+});
+
+test('persistent busy discovery reconnects and reacquires service before first handshake', async () => {
+  const { device, state } = fixture({ serviceBusy: 3 });
+  const result = await sendToCard(new Uint8Array(240), quiet, quiet, device);
+  assert.equal(result.acked, true);
+  assert.equal(state.connects, 2);
+  assert.equal(state.disconnects, 2); // Recovery, then final cleanup.
+  assert.deepEqual(state.writesAtConnect, [0, 0]);
+  assert.equal(state.writes.length, 3);
+  assert.equal(state.listeners.size, 0);
+});
+
+test('characteristic discovery and notification subscription each wait for Edge readiness', async () => {
+  const { device, state } = fixture({ characteristicBusy: 1, notificationBusy: 1 });
+  const result = await sendToCard(new Uint8Array(240), quiet, quiet, device);
+  assert.equal(result.acked, true);
+  assert.equal(state.characteristics, 3);
+  assert.equal(state.notifications, 2);
+  assert.equal(state.connects, 1);
+  assert.equal(state.stops, 1);
+});
+
+test('alternate FDF0 service is found without querying unapproved services', async () => {
+  const { device, state } = fixture({ variant: 1 });
+  const result = await sendToCard(new Uint8Array(240), quiet, quiet, device);
+  assert.equal(result.acked, true);
+  assert.deepEqual(state.servicesRequested, [0xfef0, 0xfdf0]);
+  assert.equal(state.connects, 1);
+});
+
+test('exhausted service retries report the stage, clean up, and allow a fresh send', async () => {
+  const { device, state } = fixture({ serviceBusy: Infinity });
+  await assert.rejects(sendToCard(new Uint8Array(240), quiet, quiet, device), /查找服务 0xfef0失败：Connection already in progress/);
+  assert.equal(state.connects, 3);
+  assert.equal(state.services, 9);
+  assert.equal(state.listeners.size, 0);
+  assert.equal(state.writes.length, 0);
+  assert.equal((await sendToCard(new Uint8Array(240), quiet, quiet, fixture().device)).acked, true);
 });
