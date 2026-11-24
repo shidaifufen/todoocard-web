@@ -7,10 +7,73 @@ const DATA = [0xfef2, 0xfdf2];
 const CMD_BLOCK = 0x01, CMD_LEN = 0x02, CMD_START = 0x03, CMD_ACK = 0x05;
 
 export function bleSupported() {
-  return 'bluetooth' in navigator;
+  return typeof navigator !== 'undefined' && !!navigator.bluetooth && globalThis.isSecureContext !== false;
+}
+
+let transferActive = false;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function requestCardDevice() {
+  if (!bleSupported()) throw new Error('请在 HTTPS 页面使用 Chrome / Edge，当前浏览器不支持 Web Bluetooth');
+  // 直接在点击事件中调用，避免生成图片期间丢失浏览器要求的用户手势。
+  return navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [...SVC] });
+}
+
+function waitForGattConnection(device, timeoutMs) {
+  const deadline = performance.now() + timeoutMs;
+  return (async () => {
+    while (performance.now() < deadline) {
+      if (device.gatt.connected) return true;
+      await sleep(100);
+    }
+    return device.gatt.connected;
+  })();
+}
+
+export async function connectCard(device, log = console.log) {
+  if (!device?.gatt) throw new Error('设备没有可用的 GATT 服务，请重新选择卡片');
+  if (device.gatt.connected) return device.gatt;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      log(`连接卡片…（${attempt + 1}/3）`);
+      return await device.gatt.connect();
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/connection already in progress/i.test(message)) {
+        // Edge 可能仍在完成系统连接；先观察 connected，避免立刻再发起连接。
+        log('Edge 正在完成蓝牙连接，等待连接状态…');
+        if (await waitForGattConnection(device, 5000)) return device.gatt;
+      }
+      if (attempt === 2 || !/connection already in progress|networkerror|gatt|connect|连接/i.test(error.name + ' ' + message)) {
+        if (/connection already in progress/i.test(message)) {
+          throw new Error('Edge 中已有连接仍在进行。请关闭其他土豆片网页/PWA，并暂停桌面版或手机 App 后等几秒重试。');
+        }
+        throw error;
+      }
+      try { device.gatt.disconnect(); } catch { /* 已断开 */ }
+      log('连接未完成，已清理旧连接，稍后重试…');
+      await sleep(750 * (attempt + 1));
+    }
+  }
 }
 
 export async function sendToCard(payload, log = console.log, onProgress = () => {}, reuse = null) {
+  if (transferActive) throw new Error('正在发送上一张卡片，请等待完成后再试');
+  transferActive = true;
+  try {
+    if (navigator.locks?.request) {
+      return await navigator.locks.request('todoocard-web-bluetooth', { ifAvailable: true }, async (lock) => {
+        if (!lock) throw new Error('另一个土豆片网页正在连接或发送，请等待完成，或关闭其他标签页后重试');
+        return transfer(payload, log, onProgress, reuse);
+      });
+    }
+    return await transfer(payload, log, onProgress, reuse);
+  } finally {
+    transferActive = false;
+  }
+}
+
+async function transfer(payload, log, onProgress, reuse) {
   if (!bleSupported()) throw new Error('这个浏览器不支持 Web Bluetooth，请用 Chrome / Edge');
 
   let device = reuse;
@@ -19,16 +82,20 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   } else {
     log('选择设备…');
     // 回到最宽松的方式：列出所有 BLE 设备。过滤条件越严，安卓/macOS 上越容易一个都匹配不到。
-    device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [...SVC],
-    });
+    device = await requestCardDevice();
     log(`已选择：${device.name || device.id}`);
   }
 
-  const server = await device.gatt.connect();
-  const services = await server.getPrimaryServices();
   let ctrl = null, data = null;
+  let disconnected = false, listening = false;
+  const onDisconnect = () => { disconnected = true; };
+  device.addEventListener('gattserverdisconnected', onDisconnect);
+  let onAck;
+  try {
+  const server = await connectCard(device, log);
+  disconnected = false;
+  log('已连接，正在发现卡片服务…');
+  const services = await server.getPrimaryServices();
   for (const s of services) {
     for (const c of await s.getCharacteristics()) {
       const u = parseInt(c.uuid.slice(4, 8), 16);
@@ -39,8 +106,9 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   if (!ctrl || !data) throw new Error('没找到控制点/数据点特征值');
 
   let blockSize = 0, ackEnd = false, error = '', acked = -1;
-  const onAck = (ev) => {
-    const b = new Uint8Array(ev.target.value.buffer);
+  onAck = (ev) => {
+    const value = ev.target.value;
+    const b = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     log('control ← ' + [...b].map((x) => x.toString(16).padStart(2, '0')).join(' '));
     if (!b.length) return;
     if (b[0] === CMD_BLOCK) {
@@ -58,8 +126,9 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     }
   };
 
-  await ctrl.startNotifications();
   ctrl.addEventListener('characteristicvaluechanged', onAck);
+  listening = true;
+  await ctrl.startNotifications();
   await new Promise((r) => setTimeout(r, 300));
 
   const waitFor = async (pred, ms = 5000) => {
@@ -67,6 +136,7 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     while (performance.now() - t0 < ms) {
       if (error) throw new Error(error);
       if (pred()) return true;
+      if (disconnected) throw new Error('卡片连接已断开，请靠近卡片并重新发送');
       await new Promise((r) => setTimeout(r, 50));
     }
     return false;
@@ -96,10 +166,12 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < n; i++) {
     if (error) throw new Error(error);
+    if (disconnected) throw new Error('卡片连接已断开，请重新发送');
     // 领先设备太多就等它回执
     let guard = 0;
     while (i - acked > WINDOW && !ackEnd) {
       if (error) throw new Error(error);
+      if (disconnected) throw new Error('卡片连接已断开，请重新发送');
       await sleep(20);
       if (++guard > 500) throw new Error('设备回执停滞（超过 10 秒没有进展）');
     }
@@ -131,7 +203,16 @@ export async function sendToCard(payload, log = console.log, onProgress = () => 
     log('✅ 显影确认已收到');
   }
   onProgress(1);
-  try { await ctrl.stopNotifications(); } catch (e) { /* ignore */ }
-  try { device.gatt.disconnect(); } catch (e) { /* ignore */ }
   return { ok: true, acked: ackEnd, blocks: n, device };
+  } finally {
+    // 所有失败路径都要清理，包括 connect / 服务发现 / 握手失败。
+    if (listening) {
+      ctrl.removeEventListener('characteristicvaluechanged', onAck);
+      if (device.gatt.connected) {
+        try { await ctrl.stopNotifications(); } catch { /* 连接可能已经失效 */ }
+      }
+    }
+    device.removeEventListener('gattserverdisconnected', onDisconnect);
+    try { device.gatt.disconnect(); } catch { /* 已断开 */ }
+  }
 }

@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-11 b</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 a</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -60,7 +60,7 @@
     <canvas id="cv" width="528" height="792"></canvas>
     <div class="row" style="margin-top:12px">
       <button id="send" onclick="sendNow()" style="flex:1">连接并发送</button>
-      <button class="ghost" onclick="forceScan()" title="按名字找不到时用这个">扫描全部</button>
+      <button id="scan" class="ghost" onclick="forceScan()" title="按名字找不到时用这个">扫描全部</button>
       <button class="ghost" onclick="rebuild()">重新生成</button>
     </div>
     <div class="bar"><i id="prog"></i></div>
@@ -104,9 +104,9 @@
 
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
-import { buildPayloads } from './js/payload.js?v=20261111a';
-import { sendToCard, bleSupported } from './js/ble.js?v=20261111a';
-import * as T from './js/templates.js?v=20261111a';
+import { buildPayloads } from './js/payload.js?v=20261124a';
+import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124a';
+import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;
 const cv = document.getElementById('cv');
@@ -418,6 +418,12 @@ function draw() {
 
 // ── 发送 ──
 let device = null;
+let bluetoothBusy = false;
+function setBluetoothBusy(busy) {
+  bluetoothBusy = busy;
+  $('send').disabled = busy;
+  $('scan').disabled = busy;
+}
 let photoReady = Promise.resolve();   // 预览那张图加载完成的信号，发送前等它
 async function build() {
   const t0 = performance.now();
@@ -426,21 +432,31 @@ async function build() {
   return arts;
 }
 async function forceScan() {
+  if (bluetoothBusy) return log('正在连接或发送，请等待完成');
   if (!('bluetooth' in navigator)) return log('浏览器不支持 Web Bluetooth（iOS 全部不支持，请用安卓 Chrome）');
+  setBluetoothBusy(true);
   try {
     log('列出全部蓝牙设备…（安卓需要在系统里允许「附近的设备/位置」权限）');
-    const d = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [0xfef0, 0xfdf0] });
+    const d = await requestCardDevice();
     log('（若列表里都是「未知设备」，说明系统没扫到卡片：先确认桌面服务已暂停、卡片已唤醒）');
     device = d;
     log('已选择：' + (d.name || d.id) + '，现在点「连接并发送」');
   } catch (e) { log('❌ ' + (e?.message || e)); }
+  finally { setBluetoothBusy(false); }
 }
 
 async function sendNow() {
-  const btn = $('send');
-  if (!bleSupported()) { btn.disabled = false; return log('❌ 浏览器不支持 Web Bluetooth'); }
-  $('send').disabled = true;
+  if (bluetoothBusy) { log('正在连接或发送，请等待完成'); return false; }
+  if (!bleSupported()) { log('❌ 浏览器不支持 Web Bluetooth，请使用 HTTPS 页面和 Chrome / Edge'); return false; }
+  setBluetoothBusy(true);
+  $('prog').style.width = '0%';
+  $('state').textContent = device ? '正在连接卡片…' : '请选择卡片…';
   try {
+    if (!device) {
+      // 必须先弹授权选择器，再等待照片和生成 payload。
+      device = await requestCardDevice();
+      log('已选择：' + (device.name || device.id));
+    }
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
     if (st.template === 'photo') await photoReady;
     const arts = await build();
@@ -448,12 +464,17 @@ async function sendNow() {
     device = res.device || device;   // 记住设备，定时任务复用（否则每次都要人点）
     $('state').textContent = res.acked ? '✅ 已确认' : '✅ 已写完（未确认）';
     $('state').className = 'hint';
+    return res.ok;
   } catch (e) {
     const m = String(e?.message || e);
     log('❌ ' + m);
+    $('state').textContent = '发送失败：' + m;
+    $('state').className = 'hint warn';
+    if (/Connection already in progress/i.test(m)) log('请关闭同一站点的其他标签页或 PWA，暂停桌面服务及手机 App 后重试；若仍失败，重启浏览器再连接');
     if (m.includes('disconnected') || m.includes('GATT')) log('提示：设备已断开，再点一次会重新连接');
+    return false;
   } finally {
-    btn.disabled = false;
+    setBluetoothBusy(false);
   }
 }
 function rebuild() { draw(); build(); }
@@ -494,7 +515,11 @@ function renderFavList(){
 
 function addSched() { (st.sched = st.sched || []).push({ time: '08:00', template: 'summary' }); save(); renderSched(); }
 function delSched(i) { st.sched.splice(i, 1); save(); renderSched(); }
-async function runSched(i) { st.template = st.sched[i].template; renderTabs(); renderParams(); draw(); await new Promise(r => setTimeout(r, 200)); sendNow(); }
+async function runSched(i) {
+  if (bluetoothBusy) return log('正在发送上一张卡片，请稍后再执行');
+  st.template = st.sched[i].template; renderTabs(); renderParams(); await draw();
+  await sendNow();
+}
 function startSched() {
   if (timer) { clearInterval(timer); timer = null; $('schedBtn').textContent = '启用定时'; $('schedState').textContent = '已停止'; return; }
   timer = setInterval(checkSched, 20000);
@@ -508,30 +533,33 @@ async function acquireDevice() {
     const bt = navigator.bluetooth;
     if (!bt || !bt.getDevices) return;
     const list = await bt.getDevices();
-    if (list?.length) { device = list[0]; log('已恢复上次授权的设备：' + (device.name || device.id)); }
+    if (list?.length && !device && !bluetoothBusy) { device = list[0]; log('已恢复上次授权的设备：' + (device.name || device.id)); }
   } catch (e) { /* 忽略 */ }
 }
 
 let sendingSched = false;
-function checkSched() {
+async function checkSched() {
+  if (sendingSched || bluetoothBusy) return;
   const now = new Date();
   const today = now.toDateString();
   const minutesNow = now.getHours() * 60 + now.getMinutes();
-  (st.sched || []).forEach((s) => {
-    if (!s || !s.time) return;
-    if (s.lastRun === today) { return; }
+  for (const s of st.sched || []) {
+    if (!s || !s.time) continue;
+    if (s.lastRun === today || (s.retryAfter || 0) > Date.now()) continue;
     const [hh, mm] = s.time.split(':').map(Number);
     const due = hh * 60 + mm;
     // 允许 5 分钟补跑：后台标签页的定时器会被浏览器降频，逐分钟精确匹配会漏掉
-    if (minutesNow < due || minutesNow - due > 5) return;
-    s.lastRun = today; save();
+    if (minutesNow < due || minutesNow - due > 5) continue;
     log(`⏰ 到点：${s.time} → ${s.template}`);
     if (!device) { log('还没授权过卡片：先手动点一次「连接并发送」，之后定时就能自动发'); return; }
-    if (sendingSched) { log('上一个定时任务还在发送，跳过这次'); return; }
     sendingSched = true;
-    st.template = s.template; renderTabs(); renderParams(); draw();
-    setTimeout(() => { sendNow().finally(() => { sendingSched = false; }); }, 400);
-  });
+    try {
+      st.template = s.template; renderTabs(); renderParams(); await draw();
+      if (await sendNow()) { s.lastRun = today; delete s.retryAfter; }
+      else s.retryAfter = Date.now() + 60000;
+      save();
+    } finally { sendingSched = false; }
+  }
 }
 
 // ── 事件 ──
@@ -622,7 +650,17 @@ if (!st.weather && (st.template === 'weather' || st.template === 'summary')) fet
 draw();
 </script>
 <script>
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  const wasControlled = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+    .then(registration => registration.update()).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // 不在传输过程中强制刷新，避免中断蓝牙或丢失用户输入。
+    const status = document.getElementById('state');
+    if (wasControlled && status && !document.getElementById('send').disabled)
+      status.textContent = '网页已更新，请刷新一次以使用最新版本';
+  });
+}
 let _installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _installEvt = e;
   const b = document.getElementById('installBtn'); if (b) b.style.display = 'inline-block'; });
