@@ -59,6 +59,29 @@ export async function connectCard(device, log = console.log) {
 
 const isGattBusy = error => /connection already in progress|gatt operation already in progress/i.test(String(error?.message || error));
 
+async function writeControl(ctrl, bytes, stage, log, retries = 4) {
+  // Select the same ATT write type from advertised properties explicitly.
+  // Avoid the deprecated writeValue default path on current Edge/Chrome.
+  const method = ctrl.properties?.write && typeof ctrl.writeValueWithResponse === 'function'
+    ? 'writeValueWithResponse'
+    : ctrl.properties?.writeWithoutResponse && typeof ctrl.writeValueWithoutResponse === 'function'
+      ? 'writeValueWithoutResponse' : 'writeValue';
+  for (let attempt = 0; ; attempt++) {
+    try { return await ctrl[method](bytes); }
+    catch (error) {
+      // 0x01 and 0x02 only query/set transfer metadata and are safe to retry.
+      // 0x03 starts the transfer and deliberately uses retries=0 to avoid a
+      // duplicate start if the browser reports an ambiguous write failure.
+      if (!isGattBusy(error) || attempt >= retries) {
+        throw new Error(`${stage}失败：${error?.message || error}`, { cause: error });
+      }
+      const delay = 300 * (attempt + 1);
+      log(`${stage}暂被 Edge 蓝牙队列占用，${delay} ms 后重试（${attempt + 1}/${retries}）…`);
+      await sleep(delay);
+    }
+  }
+}
+
 // On Windows, connect() can resolve before service discovery has settled. Retry
 // reads on the current connection first; never replay image writes here.
 async function gattReady(operation, stage, log) {
@@ -185,7 +208,8 @@ async function transfer(payload, log, onProgress, reuse) {
   };
 
   log('状态通知已就绪，正在请求分块大小…');
-  await ctrl.writeValue(new Uint8Array([CMD_BLOCK]));
+  log(`控制特征写入能力：write=${!!ctrl.properties?.write}，writeWithoutResponse=${!!ctrl.properties?.writeWithoutResponse}`);
+  await writeControl(ctrl, new Uint8Array([CMD_BLOCK]), '请求分块大小', log);
   if (!(await waitFor(() => blockSize > 0))) throw new Error('等不到 block size 响应');
   log(`block payload = ${blockSize} 字节`);
 
@@ -199,9 +223,9 @@ async function transfer(payload, log, onProgress, reuse) {
   log(`共 ${n} 块`);
 
   const lenBytes = new Uint8Array([CMD_LEN, buf.length & 0xff, (buf.length >> 8) & 0xff, (buf.length >> 16) & 0xff]);
-  await ctrl.writeValue(lenBytes);
+  await writeControl(ctrl, lenBytes, '发送图片长度', log);
   await new Promise((r) => setTimeout(r, 200));
-  await ctrl.writeValue(new Uint8Array([CMD_START]));
+  await writeControl(ctrl, new Uint8Array([CMD_START]), '开始传输', log, 0);
 
   // 关键：按设备的逐块回执做流控。写太快会把设备缓冲灌爆，
   // 表现就是 "GATT Service no longer exists"（设备端直接重启/掉线）。

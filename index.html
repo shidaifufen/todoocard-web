@@ -42,7 +42,7 @@
 <body>
 <header>
   <h1>土豆片 · 网页版 <button id="installBtn" onclick="installApp()" style="display:none;font-size:13px;padding:4px 10px;margin-left:10px;vertical-align:middle">安装到桌面</button></h1>
-  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 b</b> · 定时任务需要页面保持打开</p>
+  <p class="sub">渲染 → 六色抖动 → QuickLZ → Web Bluetooth 直传，全部在浏览器本地完成。<b id="ver">build 2026-11-24 c</b> · 定时任务需要页面保持打开</p>
 </header>
 
 <div style="max-width:1240px;margin:0 auto;padding:0 20px 6px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -105,7 +105,7 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script type="module">
 import { buildPayloads } from './js/payload.js?v=20261124a';
-import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124b';
+import { sendToCard, bleSupported, requestCardDevice } from './js/ble.js?v=20261124c';
 import * as T from './js/templates.js?v=20261124a';
 
 const W = 528, H = 792;
@@ -470,7 +470,7 @@ async function sendNow() {
     log('❌ ' + m);
     $('state').textContent = '发送失败：' + m;
     $('state').className = 'hint warn';
-    if (/Connection already in progress/i.test(m)) log('请关闭同一站点的其他标签页或 PWA，暂停桌面服务及手机 App 后重试；若仍失败，重启浏览器再连接');
+    if (/Connection already in progress/i.test(m)) log('Edge 仍报告连接忙。请保留上面的具体失败阶段，等几秒重试，并检查是否有其他连接占用卡片');
     if (m.includes('disconnected') || m.includes('GATT')) log('提示：设备已断开，再点一次会重新连接');
     return false;
   } finally {

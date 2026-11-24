@@ -7,7 +7,8 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { bl
 function fixture({ connectFailures = 0, delayedConnect = false, serviceError = false, dataError = false, offset = false,
   serviceBusy = 0, characteristicBusy = 0, notificationBusy = 0, variant = 0 } = {}) {
   const state = { connects: 0, disconnects: 0, stops: 0, writes: [], listeners: new Map(),
-    services: 0, characteristics: 0, notifications: 0, servicesRequested: [], writesAtConnect: [] };
+    services: 0, characteristics: 0, notifications: 0, servicesRequested: [], writesAtConnect: [],
+    controlAttempts: [], dataPackets: [] };
   const ctrl = {
     uuid: '0000fef1-0000-1000-8000-00805f9b34fb',
     addEventListener: (name, listener) => state.listeners.set(name, listener),
@@ -18,6 +19,7 @@ function fixture({ connectFailures = 0, delayedConnect = false, serviceError = f
     stopNotifications: async () => { state.stops++; },
     writeValue: async (bytes) => {
       state.writes.push([...bytes]);
+      state.controlAttempts.push([...bytes]);
       if (bytes[0] === 1) notify([1, 244, 0]);
     },
   };
@@ -28,9 +30,12 @@ function fixture({ connectFailures = 0, delayedConnect = false, serviceError = f
   }
   const data = {
     uuid: '0000fef2-0000-1000-8000-00805f9b34fb',
-    writeValueWithResponse: async () => {
+    writeValueWithResponse: async packet => {
       if (dataError) throw new Error('GATT write failed');
-      notify([5, 8]);
+      state.dataPackets.push([...packet]);
+      const index = packet[0] | (packet[1] << 8) | (packet[2] << 16) | (packet[3] << 24);
+      notify([5, 0, index & 0xff, (index >>> 8) & 0xff, (index >>> 16) & 0xff, (index >>> 24) & 0xff]);
+      if (index === (state.expectedChunks ?? 1) - 1) notify([5, 8]);
     },
   };
   const device = {
@@ -75,6 +80,41 @@ function fixture({ connectFailures = 0, delayedConnect = false, serviceError = f
     },
   };
   return { device, state };
+}
+
+function controlBusyCard({ attempts = 2 } = {}) {
+  const f = fixture();
+  const service = f.device.gatt;
+  // Proxy the control characteristic returned by the FEF0 service. Simulate
+  // Edge rejecting the first writes before any command reaches the peripheral.
+  const originalGet = service.getPrimaryService;
+  service.getPrimaryService = async uuid => {
+    const primary = await originalGet(uuid);
+    const characteristic = primary.getCharacteristic;
+    primary.getCharacteristic = async id => {
+      const result = await characteristic(id);
+      if (id === 0xfef1) {
+        const originalWrite = result.writeValue;
+        result.writeValue = async bytes => {
+          const command = [...bytes];
+          const left = state.remaining.get(command[0]) || 0;
+          state.remaining.set(command[0], left);
+          if (left > 0) {
+            state.remaining.set(command[0], left - 1);
+            state.busyAttempts.push(command);
+            throw new Error('Connection already in progress.');
+          }
+          return originalWrite(bytes);
+        };
+      }
+      return result;
+    };
+    return primary;
+  };
+  const state = f.state;
+  state.busyAttempts = [];
+  state.remaining = new Map([[1, attempts]]);
+  return f;
 }
 const quiet = () => {};
 
@@ -191,4 +231,64 @@ test('exhausted service retries report the stage, clean up, and allow a fresh se
   assert.equal(state.listeners.size, 0);
   assert.equal(state.writes.length, 0);
   assert.equal((await sendToCard(new Uint8Array(240), quiet, quiet, fixture().device)).acked, true);
+});
+
+test('Edge busy on the first block-size control write recovers and completes the full image', async () => {
+  const { device, state } = controlBusyCard({ attempts: 2 });
+  const payload = Uint8Array.from({ length: 24686 }, (_, i) => (i * 37 + 11) & 0xff);
+  state.expectedChunks = Math.ceil(payload.length / 240);
+  const logs = [];
+  const result = await sendToCard(payload, s => logs.push(s), quiet, device);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.acked, true);
+  assert.equal(result.blocks, 103);
+  assert.deepEqual(state.busyAttempts, [[1], [1]]);
+  assert.deepEqual(state.controlAttempts, [[1], [2, 0x90, 0x60, 0], [3]]);
+  assert.equal(state.dataPackets.length, 103);
+  assert.equal(state.dataPackets[0].length, 244);
+  assert.equal(state.dataPackets[0][0], 0);
+  assert.equal(state.dataPackets[102][0], 102);
+  assert.equal(state.dataPackets[102][1], 0);
+  const reconstructed = Uint8Array.from(state.dataPackets.flatMap(packet => packet.slice(4)));
+  assert.deepEqual(reconstructed.subarray(0, payload.length), payload);
+  assert.equal(state.dataPackets[102].slice(4, 210).length, 206);
+  assert.ok(state.dataPackets[102].slice(4 + 206).every(byte => byte === 0));
+  assert.ok(logs.some(s => s.includes('请求分块大小暂被 Edge 蓝牙队列占用')));
+  assert.equal(state.stops, 1);
+  assert.equal(state.listeners.size, 0);
+});
+
+test('ambiguous start-transfer failure is not retried to avoid duplicate transfer', async () => {
+  const { device, state } = fixture();
+  const primary = device.gatt.getPrimaryService;
+  device.gatt.getPrimaryService = async id => {
+    const service = await primary(id);
+    const get = service.getCharacteristic;
+    service.getCharacteristic = async uuid => {
+      const characteristic = await get(uuid);
+      if (uuid === 0xfef1) {
+        const write = characteristic.writeValue;
+        characteristic.writeValue = async bytes => {
+          if (bytes[0] === 3) throw new Error('Connection already in progress.');
+          return write(bytes);
+        };
+      }
+      return characteristic;
+    };
+    return service;
+  };
+  await assert.rejects(sendToCard(new Uint8Array(240), quiet, quiet, device), /开始传输失败：Connection already in progress/);
+  assert.deepEqual(state.controlAttempts, [[1], [2, 240, 0, 0]]);
+  assert.equal(state.dataPackets.length, 0);
+  assert.equal(state.stops, 1);
+});
+
+test('exhausted block-size retries report control-write stage before any data is sent', async () => {
+  const { device, state } = controlBusyCard({ attempts: Infinity });
+  await assert.rejects(sendToCard(new Uint8Array(240), quiet, quiet, device), /请求分块大小失败：Connection already in progress/);
+  assert.equal(state.busyAttempts.length, 5);
+  assert.equal(state.controlAttempts.length, 0);
+  assert.equal(state.dataPackets.length, 0);
+  assert.equal(state.listeners.size, 0);
 });
