@@ -4,6 +4,10 @@
 
 在线使用：https://shidaifufen.github.io/todoocard-web/
 
+## 看板版式包
+
+在右侧打开「看板版式包」，选择示例，或从 GitHub 链接和本地 JSON 导入。场景详情可调整卡面标题、强调色、列表编号和部分内容区块。应用后用于预览、手动推送和定时推送。也可以导出配置、撤销或恢复内置版式。[版式目录与格式](https://github.com/shidaifufen/todoocard-eink/tree/main/layouts)
+
 ### 蓝牙配对验证与回溯测试（build 2026-11-24 g）
 
 首次配对时，长按卡片背面按键至快闪，再点「验证配对」，选择卡片并确认系统提示。验证只读取电量特征 `180F/2A19`，完成后释放连接。安全固件要求加密链路才能读取这个特征。网页不能查询 Windows 配对记录或读取卡片的实体配对窗口。这个步骤参考 [官方 TodooCard Skills](https://github.com/Sunbelife/TodooCard_Skills/blob/81f61e1/README.md)。
