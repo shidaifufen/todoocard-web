@@ -30,6 +30,8 @@
   textarea{min-height:64px;max-height:150px;resize:vertical;overflow:auto}
   .row{display:flex;gap:8px;align-items:center}
   .row > *{min-width:0}
+  .online-actions{display:flex;gap:8px;margin-top:8px}
+  [hidden]{display:none!important}
   .sched{display:grid;grid-template-columns:92px 1fr auto auto;gap:6px;margin-bottom:6px}
   .photos{display:flex;gap:6px;flex-wrap:wrap;max-height:120px;overflow:auto}
   .photos img{width:56px;height:84px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
@@ -81,6 +83,7 @@
     <section class="panel">
       <h3>内容</h3>
       <div id="params"></div>
+      <div id="onlineParams" hidden></div>
     </section>
 
     <section class="panel" id="layoutSettings"></section>
@@ -122,6 +125,7 @@ import { sendWithProfile } from './js/transfer-profiles.js?v=20261124g';
 import * as T from './js/templates.js';
 import { fetchPack, needsWeather, parsePack, renderPack } from './js/layout-pack.js';
 import { mountLayouts } from './js/layout-ui.js';
+import { mountOnline } from './online/ui.js';
 
 const W = 528, H = 792;
 const cv = document.getElementById('cv');
@@ -302,7 +306,7 @@ function pickPhoto() {
 // ── 模板 ──
 const TPLS = [['quote', '每日一句'], ['summary', '每日总结'], ['todo', '今日待办'], ['progress', '时间进度'],
   ['calendar', '月历'], ['countdown', '倒计时'], ['weather', '天气'], ['weather2', '色块天气'], ['poem', '每日诗词'],
-  ['custom', '自定义'], ['photo', '照片轮播']];
+  ['custom', '自定义'], ['photo', '照片轮播'], ['online', '在线场景']];
 function renderTabs() {
   $('tabs').innerHTML = TPLS.map(([k, n]) => `<button class="tab ${st.template === k ? 'on' : ''}" data-k="${k}">${n}</button>`).join('');
   $('tabs').querySelectorAll('.tab').forEach((b) => b.onclick = () => {
@@ -312,6 +316,9 @@ function renderTabs() {
 function renderParams() {
   const k = st.template;
   const box = $('params');
+  box.hidden = k === 'online';
+  $('onlineParams').hidden = k !== 'online';
+  if (k === 'online') return;
   if (k === 'quote') box.innerHTML = '<label>一句话<textarea id="p_quote"></textarea></label><label>原作者或出处<input id="p_quoteBy"></label>';
   else if (k === 'todo') box.innerHTML = `<label>待办（每行一条）</label><textarea id="p_todos">${st.todos.join('\n')}</textarea>`;
   else if (k === 'countdown') box.innerHTML = `<label>纪念日（名称,YYYY-MM-DD，每行一条）</label><textarea id="p_cd">${st.countdowns.map(c => c.name + ',' + c.date).join('\n')}</textarea>`;
@@ -448,6 +455,10 @@ function layoutView() {
 }
 
 function draw() {
+  if (st.template === 'online') {
+    ctx.drawImage(onlineCanvas, 0, 0);
+    return;
+  }
   const view = layoutView();
   const override = layouts.active?.templates[st.template];
   if (override) return renderPack(ctx, override, view, { scale: st.scale || 1, spacing: st.line || 1 });
@@ -573,6 +584,7 @@ async function sendNow() {
     }
     // 不要在发送前重画：那会重新抽一张照片，和预览不一致
     if (st.template === 'photo') await photoReady;
+    if (st.template === 'online' && !onlinePicker.ready) throw new Error('请先生成在线卡片');
     const arts = await build();
     const res = await sendWithProfile(arts.payload, log, (p) => $('prog').style.width = (p * 100) + '%', device, 'prepared');
     device = res.device || device;   // 记住设备，定时任务复用（否则每次都要人点）
@@ -599,7 +611,7 @@ function renderSched() {
   $('schedList').innerHTML = (st.sched || []).map((s, i) => `
     <div class="sched">
       <input type="time" value="${s.time}" data-i="${i}" data-f="time">
-      <select data-i="${i}" data-f="template">${TPLS.map(([k, n]) => `<option value="${k}" ${s.template === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <select data-i="${i}" data-f="template">${TPLS.filter(([k]) => k !== 'online').map(([k, n]) => `<option value="${k}" ${s.template === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <button class="ghost" onclick="runSched(${i})">执行</button>
       <button class="ghost" onclick="delSched(${i})">删</button>
     </div>`).join('');
@@ -749,6 +761,13 @@ window.genNote = genNote;
 window.pairNow = pairNow; window.forceScan = forceScan; window.fetchWeather = fetchWeather; window.rebuild = rebuild; window.sendNow = sendNow;
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
+const onlineCanvas = document.createElement('canvas');
+onlineCanvas.width = W;
+onlineCanvas.height = H;
+const onlinePicker = mountOnline($('onlineParams'), onlineCanvas, {
+  onCard: () => { if (st.template === 'online') draw(); },
+  onEmpty: () => { if (st.template === 'online') draw(); },
+});
 renderTabs(); renderParams(); renderSched(); draw();
 mountLayouts($('layoutSettings'), {
   read: () => layouts,

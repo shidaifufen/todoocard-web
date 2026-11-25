@@ -1,6 +1,6 @@
-const CACHE = 'todoocard-web-shell-v7';
+const CACHE = 'todoocard-web-shell-v8';
 const FILES = ['./', './index.html', './js/templates.js', './js/layout-pack.js', './js/layout-ui.js', './js/payload.js', './js/ble.js', './js/transfer-profiles.js', './js/card-connection.js', './js/ble-legacy.js', './js/ble-20261124b.js',
-               './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+               './online/ui.js', './online/sources.js', './online/render.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const scopeURL = new URL(self.registration.scope);
 self.addEventListener('install', e => e.waitUntil(
   caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
