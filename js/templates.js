@@ -47,7 +47,7 @@ const wxText = (c) => (c === 0 ? '晴' : c < 4 ? '多云' : c < 50 ? '雾' : c <
 export { wxText };
 
 /** 天气图标：实心色块 + 黑描边，墨水屏上才看得清 */
-function wxIcon(ctx, x, y, size, code) {
+export function wxIcon(ctx, x, y, size, code) {
   const cx = x + size / 2, cy = y + size / 2, r = size / 5;
   ctx.lineWidth = 5;
   if (code === 0 || code === 1) {

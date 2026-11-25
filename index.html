@@ -26,6 +26,7 @@
   button:disabled{opacity:.45}
   label{display:block;font-size:12px;color:var(--sub);margin:10px 0 4px}
   input,textarea,select{width:100%;background:#10131a;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font:inherit}
+  input[type=checkbox]{width:auto;accent-color:var(--accent)}
   textarea{min-height:64px;max-height:150px;resize:vertical;overflow:auto}
   .row{display:flex;gap:8px;align-items:center}
   .row > *{min-width:0}
@@ -82,6 +83,8 @@
       <div id="params"></div>
     </section>
 
+    <section class="panel" id="layoutSettings"></section>
+
     <section class="panel">
       <h3>照片库 <span class="hint" id="photoCount"></span></h3>
       <div class="row">
@@ -116,7 +119,9 @@ import { buildPayloads } from './js/payload.js?v=20261124a';
 import { bleSupported, requestCardDevice } from './js/ble.js?v=20261124f';
 import { verifyCardPairing } from './js/card-connection.js?v=20261124g';
 import { sendWithProfile } from './js/transfer-profiles.js?v=20261124g';
-import * as T from './js/templates.js?v=20261124a';
+import * as T from './js/templates.js';
+import { fetchPack, needsWeather, parsePack, renderPack } from './js/layout-pack.js';
+import { mountLayouts } from './js/layout-ui.js';
 
 const W = 528, H = 792;
 const cv = document.getElementById('cv');
@@ -139,6 +144,32 @@ const DEF = { template: 'quote', quote: '把今天过好，就是对明天最好
   custom: { title: '我的卡片', lines: ['今天也要好好生活', '把重要的事写下来'] } };
 let st = Object.assign({}, DEF, JSON.parse(localStorage.getItem('todo-web') || '{}'));
 const save = () => localStorage.setItem('todo-web', JSON.stringify(st));
+const layoutKey = 'todoocard-layouts-v1';
+let layouts = {};
+try {
+  const saved = JSON.parse(localStorage.getItem(layoutKey) || '{}');
+  for (const key of ['active', 'previous']) {
+    if (Object.hasOwn(saved, key)) layouts[key] = saved[key] ? parsePack(JSON.stringify(saved[key])) : null;
+  }
+} catch {
+  layouts = {};
+}
+
+function saveLayout(action, pack) {
+  let next;
+  if (action === 'apply') {
+    const merged = { ...pack, templates: { ...layouts.active?.templates, ...pack.templates } };
+    next = { active: parsePack(JSON.stringify(merged)), previous: layouts.active || null };
+  } else if (action === 'undo') {
+    if (!Object.hasOwn(layouts, 'previous')) throw new Error('没有可撤销的版式');
+    next = { active: layouts.previous };
+  } else {
+    next = { active: null, previous: layouts.active || null };
+  }
+  localStorage.setItem(layoutKey, JSON.stringify(next));
+  layouts = next;
+  return layouts;
+}
 
 // ── 照片库（IndexedDB）──
 let photos = [];
@@ -274,15 +305,17 @@ const TPLS = [['quote', '每日一句'], ['summary', '每日总结'], ['todo', '
   ['custom', '自定义'], ['photo', '照片轮播']];
 function renderTabs() {
   $('tabs').innerHTML = TPLS.map(([k, n]) => `<button class="tab ${st.template === k ? 'on' : ''}" data-k="${k}">${n}</button>`).join('');
-  $('tabs').querySelectorAll('.tab').forEach((b) => b.onclick = () => { st.template = b.dataset.k; save(); renderTabs(); renderParams(); draw(); });
+  $('tabs').querySelectorAll('.tab').forEach((b) => b.onclick = () => {
+    st.template = b.dataset.k; save(); renderTabs(); renderParams(); draw(); refreshLayoutWeather(st.template);
+  });
 }
 function renderParams() {
   const k = st.template;
   const box = $('params');
-  if (k === 'quote') box.innerHTML = `<label>一句话</label><textarea id="p_quote">${st.quote}</textarea>`;
+  if (k === 'quote') box.innerHTML = '<label>一句话<textarea id="p_quote"></textarea></label><label>原作者或出处<input id="p_quoteBy"></label>';
   else if (k === 'todo') box.innerHTML = `<label>待办（每行一条）</label><textarea id="p_todos">${st.todos.join('\n')}</textarea>`;
   else if (k === 'countdown') box.innerHTML = `<label>纪念日（名称,YYYY-MM-DD，每行一条）</label><textarea id="p_cd">${st.countdowns.map(c => c.name + ',' + c.date).join('\n')}</textarea>`;
-  else if (k === 'weather' || k === 'summary') box.innerHTML = `<label>城市</label><div class="row"><input id="p_city" value="${st.city}"><button class="ghost" onclick="fetchWeather()">拉取</button></div>
+  else if (['weather', 'weather2', 'summary'].includes(k)) box.innerHTML = `<label for="p_city">城市</label><div class="row"><input id="p_city"><button class="ghost" onclick="fetchWeather()">拉取</button></div>
      <div class="hint" style="margin-top:6px">${st.weather ? `${st.weather.temp}° ${st.weather.text}` : '未获取'}</div>`;
   else if (k === 'poem') box.innerHTML = `
      <label>整首优先（不截断，字号自动缩）</label>
@@ -330,6 +363,13 @@ function renderParams() {
   bind('p_quote', (v) => st.quote = v);
   bind('p_todos', (v) => st.todos = v.split('\n').map(s => s.trim()).filter(Boolean));
   bind('p_cd', (v) => st.countdowns = v.split('\n').map(l => { const [name, date] = l.split(','); return name && date ? { name: name.trim(), date: date.trim() } : null; }).filter(Boolean));
+  if ($('p_quote')) $('p_quote').value = st.quote;
+  if ($('p_quoteBy')) $('p_quoteBy').value = st.quoteBy || '';
+  bind('p_quoteBy', (v) => st.quoteBy = v.trim());
+  if (!$('p_city') && layouts.active?.templates[k] && needsWeather(layouts.active.templates[k])) {
+    box.insertAdjacentHTML('beforeend', '<label for="p_city">天气城市</label><div class="row"><input id="p_city"><button class="ghost" onclick="fetchWeather()">刷新天气</button></div>');
+  }
+  if ($('p_city')) $('p_city').value = st.city;
   bind('p_city', (v) => st.city = v.trim());
   bind('p_title', (v) => st.poem.title = v);
   bind('p_dyn', (v) => st.poem.dynasty = v);
@@ -345,30 +385,72 @@ function renderParams() {
 }
 
 // ── 天气 ──
-async function fetchWeather() {
+let weatherRequest;
+function fetchWeather() {
+  const city = st.city;
+  if (weatherRequest?.city === city) return weatherRequest.promise;
+  const promise = updateWeather(city).finally(() => {
+    if (weatherRequest?.promise === promise) weatherRequest = null;
+  });
+  weatherRequest = { city, promise };
+  return promise;
+}
+
+function ensureWeather() {
+  if (st.weather?.requestedCity === st.city && Date.now() - st.weather.updatedAt < 900000) return;
+  return fetchWeather();
+}
+
+function refreshLayoutWeather(kind) {
+  const template = layouts.active?.templates[kind];
+  if (['weather', 'weather2', 'summary'].includes(kind) || (template && needsWeather(template))) return ensureWeather();
+}
+
+async function updateWeather(requested) {
   try {
-    const geo = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(st.city)}&count=1&language=zh`)).json();
+    const geo = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(requested)}&count=1&language=zh`, { signal: AbortSignal.timeout(8000) })).json();
     const g = geo.results?.[0];
     if (!g) throw new Error('找不到这个城市');
+    const coords = `latitude=${g.latitude}&longitude=${g.longitude}&timezone=auto`;
+    const [w, air] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?${coords}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset&hourly=temperature_2m,weather_code&forecast_days=4`, { signal: AbortSignal.timeout(12000) }).then(r => r.json()),
+      fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${coords}&current=us_aqi`, { signal: AbortSignal.timeout(6000) }).then(r => r.json()).catch(() => null),
+    ]);
+    if (st.city !== requested) return;
     st.lat = g.latitude; st.lon = g.longitude;
-    const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${st.lat}&longitude=${st.lon}` +
-      `&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`)).json();
     const code = w.current.weather_code;
     st.weather = { temp: w.current.temperature_2m, hi: w.daily.temperature_2m_max[0], lo: w.daily.temperature_2m_min[0],
       feels: w.current.apparent_temperature ?? w.current.temperature_2m, code,
-      text: wxText(code), city: g.name };
-    st.hourly = w.hourly.time.slice(0, 4).map((t, i) => ({ t: t.slice(11, 16), temp: Math.round(w.hourly.temperature_2m[i]), text: wxText(w.hourly.weather_code[i]) }));
+      text: wxText(code), city: g.name, requestedCity: requested, updatedAt: Date.now(),
+      aqi: air?.current?.us_aqi, hum: w.current.relative_humidity_2m,
+      sunrise: w.daily.sunrise[0]?.slice(11, 16), sunset: w.daily.sunset[0]?.slice(11, 16),
+      clock: w.current.time.slice(11, 16),
+      daily3: w.daily.time.slice(0, 3).map((_, i) => ({
+        label: ['今天', '明天', '后天'][i], text: wxText(w.daily.weather_code[i]),
+        hi: Math.round(w.daily.temperature_2m_max[i]), lo: Math.round(w.daily.temperature_2m_min[i]),
+      })),
+    };
+    const start = Math.max(0, w.hourly.time.findIndex(t => t >= w.current.time));
+    st.hourly = w.hourly.time.slice(start, start + 6).map((t, i) => ({
+      t: t.slice(11, 16), temp: Math.round(w.hourly.temperature_2m[start + i]), text: wxText(w.hourly.weather_code[start + i]),
+    }));
     save(); renderParams(); draw(); log(`天气已更新：${st.weather.temp}° ${st.weather.text}`);
   } catch (e) { log('❌ 天气获取失败：' + e.message); }
 }
 function wxText(c) { return c === 0 ? '晴' : c < 4 ? '多云' : c < 50 ? '雾' : c < 70 ? '雨' : c < 80 ? '雪' : '雨'; }
 
 // ── 绘制 ──
-function draw() {
+function layoutView() {
   const now = new Date();
-  const view = { now, quote: st.quote, todos: st.todos, countdowns: st.countdowns, weather: st.weather,
+  return { now, city: st.city, quote: st.quote, quoteBy: st.quoteBy, todos: st.todos, countdowns: st.countdowns, weather: st.weather,
     hourly: st.hourly, poem: st.poem, poemNote: st.poemNote, custom: st.custom,
     poemFull: st.poemFull };
+}
+
+function draw() {
+  const view = layoutView();
+  const override = layouts.active?.templates[st.template];
+  if (override) return renderPack(ctx, override, view, { scale: st.scale || 1, spacing: st.line || 1 });
   if (st.template === 'photo') {
     const p = pickPhoto();
     if (!p) {
@@ -549,7 +631,9 @@ function addSched() { (st.sched = st.sched || []).push({ time: '08:00', template
 function delSched(i) { st.sched.splice(i, 1); save(); renderSched(); }
 async function runSched(i) {
   if (bluetoothBusy) return log('正在发送上一张卡片，请稍后再执行');
-  st.template = st.sched[i].template; renderTabs(); renderParams(); await draw();
+  const kind = st.sched[i].template;
+  await refreshLayoutWeather(kind);
+  st.template = kind; renderTabs(); renderParams(); await draw();
   await sendNow();
 }
 function startSched() {
@@ -593,6 +677,7 @@ async function checkSched() {
     if (!device) { log('还没授权过卡片：先手动点一次「连接并发送」，之后定时就能自动发'); return; }
     sendingSched = true;
     try {
+      await refreshLayoutWeather(s.template);
       st.template = s.template; renderTabs(); renderParams(); await draw();
       if (await sendNow()) { s.lastRun = today; delete s.retryAfter; }
       else s.retryAfter = Date.now() + 60000;
@@ -665,6 +750,25 @@ window.pairNow = pairNow; window.forceScan = forceScan; window.fetchWeather = fe
 window.addSched = addSched; window.delSched = delSched; window.runSched = runSched; window.startSched = startSched;
 
 renderTabs(); renderParams(); renderSched(); draw();
+mountLayouts($('layoutSettings'), {
+  read: () => layouts,
+  fetch: fetchPack,
+  parse: parsePack,
+  preview: async (pack, kind) => {
+    const template = pack.templates[kind];
+    if (needsWeather(template)) await ensureWeather();
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    canvas.setAttribute('aria-label', '版式预览');
+    renderPack(canvas.getContext('2d'), template, layoutView(), { scale: st.scale || 1, spacing: st.line || 1 });
+    return () => canvas;
+  },
+  update: saveLayout,
+  changed: kind => {
+    if (kind) { st.template = kind; save(); }
+    renderTabs(); renderParams(); draw();
+  },
+});
 
 // 字号/行距滑杆：基准 1.1，与桌面版一致
 const scaleSlide = document.getElementById('scaleSlide');
@@ -685,7 +789,7 @@ lineSlide.addEventListener('input', applyLayout);
 T.setLayout(1.1 * (st.scale || 1), 1.1 * (st.line || 1));
 acquireDevice();
 loadPhotos().catch((e) => log('照片库不可用：' + (e?.message || e)));
-if (!st.weather && (st.template === 'weather' || st.template === 'summary')) fetchWeather();
+refreshLayoutWeather(st.template);
 draw();
 </script>
 <script>
