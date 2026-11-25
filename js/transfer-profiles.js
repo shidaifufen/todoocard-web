@@ -2,10 +2,10 @@ import { sendToCard as sendCurrent, withCardLock } from './ble.js?v=20261124f';
 import { sendToCard as sendLegacy } from './ble-legacy.js?v=20261124f';
 import { sendToCard as sendDiscovery } from './ble-20261124b.js?v=20261124f';
 
-import { openCardConnection } from './card-connection.js?v=20261124f';
+import { openCardConnection } from './card-connection.js?v=20261124g';
 
 export const TRANSFER_PROFILES = Object.freeze([
-  { id: 'prepared', label: 'D · 加密连接验证（默认）', revision: 'secure-20261124f',
+  { id: 'prepared', label: 'D · 加密连接验证（默认）', revision: 'secure-20261124g',
     description: '先读取加密电量，再准备控制服务并验证回执，复用连接发送。系统配对由浏览器处理。' },
   { id: 'legacy', label: 'A · 11月22日旧版', revision: '7b79971',
     description: '枚举服务 + writeValue 控制写入；保留旧版数据流控。' },

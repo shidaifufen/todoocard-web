@@ -42,16 +42,20 @@ export async function openCardConnection(device, log = console.log, onState = ()
       // The upstream secure firmware verifies encryption through Battery Level
       // BEFORE using the image control service. Never ignore authentication errors.
       try {
-        const battery = await step('读取加密电量，验证认证', async () => {
+        const battery = await step('读取电量特征 180F/2A19，验证认证', async () => {
           const service = await server.getPrimaryService(0x180f);
-          return (await (await service.getCharacteristic(0x2a19)).readValue()).getUint8(0);
+          const characteristic = await service.getCharacteristic(0x2a19);
+          const value = await characteristic.readValue();
+          if (value.byteLength !== 1 || value.getUint8(0) > 100) throw new Error('电量回执无效');
+          return value.getUint8(0);
         });
-        if (battery > 100) throw new Error('电量回执无效');
         log('加密电量读取通过：' + battery + '%');
+        if (options.pairingOnly) return { device, battery, close };
         await sleep(options.securePause ?? 1800);
       } catch (error) {
         if (error.name !== 'NotFoundError') throw error;
-        log('旧固件无电量服务，继续验证控制回执');
+        if (options.pairingOnly) throw new Error('设备未提供 180F/2A19，无法用电量读取验证配对', { cause: error });
+        log('未找到电量特征，继续检查传图服务');
       }
       let data;
       for (let i = 0; i < SERVICES.length; i++) {
@@ -97,8 +101,9 @@ export async function openCardConnection(device, log = console.log, onState = ()
     } catch (error) {
       await close();
       log(`连接准备失败（${stage}）：${error.name || 'Error'}: ${error.message || error}`);
-      const retryable = error.name !== 'TimeoutError' && error.name !== 'SecurityError' && error.name !== 'NotAllowedError'
-        && /NetworkError|GATT|Connection already in progress|断开/i.test(error.name + ' ' + error.message);
+      const details = [error.name, error.message].join(' ');
+      const retryable = !/TimeoutError|SecurityError|NotAllowedError|authentication|authorization|encryption|already in progress/i.test(details)
+        && /NetworkError|GATT|断开/i.test(details);
       if (!retryable || attempt === 1) throw new Error(`${stage}失败：${error.message || error}`, { cause: error });
       log('已释放连接，按原项目流程等待 1.2 秒后重新准备；尚未发送图片');
       await sleep(retryPause);
@@ -106,10 +111,10 @@ export async function openCardConnection(device, log = console.log, onState = ()
   }
 }
 
-export async function verifyCardConnection(device, log, onState) {
+export async function verifyCardPairing(device, log, onState) {
   return withCardLock(async () => {
-    const session = await openCardConnection(device, log, onState);
-    try { return { ok: true, device, blockSize: session.blockSize }; }
+    const session = await openCardConnection(device, log, onState, { pairingOnly: true });
+    try { return { ok: true, battery: session.battery }; }
     finally { await session.close(); }
   });
 }

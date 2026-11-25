@@ -58,17 +58,15 @@ test('cancelled chooser restores both controls without building a payload', asyn
   assert.equal(ui.nodes.get('scan').disabled, false);
 });
 
-test('chosen profile is forwarded, frozen during send, and unconfirmed writes show a warning', async () => {
+test('sending is pinned to D and unconfirmed writes show a warning', async () => {
   let chosen;
   const ui = page({ send: async (...args) => {
     chosen = args[4];
-    assert.equal(ui.nodes.get('transferProfile').disabled, true);
     return { ok: true, acked: false };
   } });
   ui.context.$('transferProfile').value = 'discovery';
   await ui.run();
-  assert.equal(chosen, 'discovery');
-  assert.equal(ui.nodes.get('transferProfile').disabled, false);
+  assert.equal(chosen, 'prepared');
   assert.match(ui.nodes.get('state').textContent, /未收到显影确认/);
   assert.equal(ui.nodes.get('state').className, 'hint warn');
 });

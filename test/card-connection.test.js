@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openCardConnection } from '../js/card-connection.js';
+import { openCardConnection, verifyCardPairing } from '../js/card-connection.js';
 import { sendWithProfile } from '../js/transfer-profiles.js';
 import { emulateCard } from './support/card-emulator.js';
 
@@ -19,6 +19,27 @@ function card() {
   return c;
 }
 const fast = { securePause: 0, retryPause: 0, operationTimeout: 100, replyTimeout: 10 };
+
+test('pairing verification reads only battery level and releases the connection', async () => {
+  const c = card();
+  const result = await verifyCardPairing(c.device, quiet, quiet);
+  assert.deepEqual(result, { ok: true, battery: 75 });
+  assert.deepEqual(c.order, [0x180f]);
+  assert.deepEqual(c.stats.commands, []);
+  assert.equal(c.device.gatt.connected, false);
+});
+
+test('pairing verification stops if Windows already has an operation in progress', async () => {
+  const c = card();
+  c.device.gatt.getPrimaryService = async id => {
+    c.order.push(id);
+    throw new DOMException('Connection already in progress.', 'NetworkError');
+  };
+  await assert.rejects(verifyCardPairing(c.device, quiet, quiet), /180F\/2A19.*Connection already in progress/);
+  assert.deepEqual(c.order, [0x180f]);
+  assert.deepEqual(c.stats.commands, []);
+  assert.equal(c.device.gatt.connected, false);
+});
 
 test('encrypted battery is read before image controls; verification sends only 01 and cleans up', async () => {
   const c = card();
