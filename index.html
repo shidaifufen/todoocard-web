@@ -459,17 +459,17 @@ function layoutView() {
     poemFull: st.poemFull };
 }
 
-function panelPreview(canvas) {
+function panelPreview(canvas, { x = 0, y = 0, width = W, height = H } = {}) {
   const g = canvas.getContext('2d');
-  const image = g.getImageData(0,0,W,H);
+  const image = g.getImageData(x,y,width,height);
   const packed = quantize(image);
   const ink = [[0,0,0],[255,255,255],[255,255,0],[255,0,0],null,[0,0,255],[0,255,0]];
-  for (let i=0, p=0; i<W*H; i++, p+=4) {
+  for (let i=0, p=0; i<width*height; i++, p+=4) {
     const value = packed[i >> 1];
     const color = ink[i % 2 ? value & 15 : value >> 4];
     image.data[p] = color[0]; image.data[p+1] = color[1]; image.data[p+2] = color[2];
   }
-  g.putImageData(image,0,0);
+  g.putImageData(image,x,y);
 }
 
 let currentPhoto;
@@ -803,7 +803,7 @@ const onlineCanvas = document.createElement('canvas');
 onlineCanvas.width = W;
 onlineCanvas.height = H;
 const onlinePicker = mountOnline($('onlineParams'), onlineCanvas, {
-  onCard: () => { panelPreview(onlineCanvas); if (st.template === 'online') draw(); },
+  onCard: (_canvas, _item, bounds) => { if (bounds) panelPreview(onlineCanvas, bounds); if (st.template === 'online') draw(); },
   onEmpty: () => { if (st.template === 'online') draw(); },
 });
 let toneTimer;
