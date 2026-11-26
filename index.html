@@ -636,7 +636,8 @@ function rebuild() { draw(); build(); }
 // ── 定时 ──
 let timer = null;
 function renderSched() {
-  $('schedList').innerHTML = (st.sched || []).map((s, i) => `
+  $('schedList').innerHTML = (st.sched || []).map((s, i) => ({s, i}))
+    .sort((a, b) => a.s.time.localeCompare(b.s.time)).map(({s, i}) => `
     <div class="sched">
       <input type="time" value="${s.time}" data-i="${i}" data-f="time">
       <select data-i="${i}" data-f="template">${[...TPLS.filter(([k]) => k !== 'online' || s.template === 'online'),
@@ -650,6 +651,7 @@ function renderSched() {
       item[el.dataset.f] = el.value;
       delete item.lastRun;      // 改了时间/模板就要重新算，否则今天永远不会再触发
       save();
+      if (el.dataset.f === 'time') renderSched();
     };
   });
 }
@@ -803,6 +805,7 @@ const onlineCanvas = document.createElement('canvas');
 onlineCanvas.width = W;
 onlineCanvas.height = H;
 const onlinePicker = mountOnline($('onlineParams'), onlineCanvas, {
+  remember: true,
   onCard: (_canvas, _item, bounds) => { if (bounds) panelPreview(onlineCanvas, bounds); if (st.template === 'online') draw(); },
   onEmpty: () => { if (st.template === 'online') draw(); },
 });
