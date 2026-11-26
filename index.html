@@ -231,7 +231,7 @@ async function readExif(file) {
       for (let i = 0; i < n; i++) {
         const e = base + 2 + i * 12;
         const tag = u16(e), type = u16(e + 2), cnt = u32(e + 4);
-        const valOff = cnt * (type === 3 ? 2 : type === 4 ? 4 : 1) > 4 ? tiff + u32(e + 8) : e + 8;
+        const valOff = cnt * (type === 3 ? 2 : type === 4 ? 4 : type === 5 ? 8 : 1) > 4 ? tiff + u32(e + 8) : e + 8;
         out[tag] = { type, cnt, valOff };
       }
       return out;
@@ -257,6 +257,16 @@ async function readExif(file) {
       taken: dt ? dt.replace(/^\d{4}:/, '').slice(0, 10) : '',
       time: dt ? dt.slice(11, 16) : '',
       camera: [make, model].filter(Boolean).join(' ').replace(/\s+/g, ' '),
+      coordinates: (() => {
+        const dms = (entry) => entry?.type === 5 && entry.cnt === 3
+          ? [0, 1, 2].reduce((value, i) => value + rat({valOff: entry.valOff + i * 8}) / 60 ** i, 0)
+          : NaN;
+        const latitude = dms(gps[0x0002]), longitude = dms(gps[0x0004]);
+        return latitude <= 90 && longitude <= 180 ? {
+          lat: str(gps[0x0001]).toUpperCase() === 'S' ? -latitude : latitude,
+          lon: str(gps[0x0003]).toUpperCase() === 'W' ? -longitude : longitude,
+        } : null;
+      })(),
       params: [focal ? `${Math.round(focal)}mm` : '', fnum ? `f/${fnum}` : '',
                expo ? (expo < 1 ? `1/${Math.round(1 / expo)}s` : `${expo}s`) : '',
                iso ? `ISO${iso}` : ''].filter(Boolean).join('  '),
@@ -347,15 +357,15 @@ function renderParams() {
      <label>内容（每行一条）</label><textarea id="p_clines">${st.custom.lines.join('\n')}</textarea>
      <label>二维码内容（链接/文本，留空不画）</label><input id="p_cqr" value="${st.custom.qr || ''}" placeholder="https://github.com/...">`;
   else if (k === 'photo') {
-    const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true}, st.photoFields || {});
+    const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true,location:true}, st.photoFields || {});
     box.innerHTML = `<label>轮播方式</label><select id="p_mode">
         <option value="shuffle">洗牌不重复</option>
         <option value="random">纯随机</option>
         <option value="fav">只推收藏</option></select>
       <label style="margin-top:10px">信息带显示项（勾掉就不占高度）</label>
-      ${['date','time','camera','params','weather'].map(k2 =>
+      ${['date','time','camera','params','weather','location'].map(k2 =>
         `<label style="display:inline-flex;gap:4px;margin-right:12px">
-           <input type="checkbox" data-pf="${k2}"${pf[k2]?' checked':''}>${{date:'日期',time:'时间',camera:'机身',params:'参数',weather:'天气'}[k2]}</label>`).join('')}
+           <input type="checkbox" data-pf="${k2}"${pf[k2]?' checked':''}>${{date:'日期',time:'时间',camera:'机身',params:'参数',weather:'天气',location:'位置'}[k2]}</label>`).join('')}
       <div class="btnrow" style="margin-top:10px">
         <button class="ghost" onclick="favPhoto()">☆ 收藏当前照片</button>
         <button class="ghost" onclick="renderFavList()">查看收藏</button>
@@ -459,6 +469,15 @@ function layoutView() {
     poemFull: st.poemFull };
 }
 
+async function photoPlace({lat,lon}) {
+  const response = await fetch(`https://photon.komoot.io/reverse?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&limit=1`,
+    { signal: AbortSignal.timeout(3500) });
+  if (!response.ok) throw new Error('Place lookup failed');
+  const properties = (await response.json()).features?.[0]?.properties || {};
+  return properties.city || properties.municipality || properties.town ||
+    properties.village || properties.locality || '';
+}
+
 function panelPreview(canvas, { x = 0, y = 0, width = W, height = H } = {}) {
   const g = canvas.getContext('2d');
   const image = g.getImageData(x,y,width,height);
@@ -497,16 +516,25 @@ function draw(keepPhoto = false) {
     }
     const img = new Image();
     photoReady = new Promise((res) => {
-      img.onload = () => {
+      img.onload = async () => {
         if (st.template !== "photo" || revision !== photoRevision) { res(); return; }
         const e = p.exif || {};
-        const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true}, st.photoFields || {});
+        const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true,location:true}, st.photoFields || {});
         const taken = [pf.date ? e.taken : '', pf.time ? e.time : ''].filter(Boolean).join('  ');
         const camera = pf.camera ? e.camera || '' : '';
         const params = pf.params ? e.params || '' : '';
-        const showWx = pf.weather && st.weather;
-        const rows = Number(!!(taken || camera)) + Number(!!params) + Number(!!showWx);
-        const band = rows ? 18 + rows * 28 : 0;
+        if (pf.location && e.coordinates && !p.place) {
+          p.placePromise ||= photoPlace(e.coordinates).catch(() => '');
+          p.place = await p.placePromise;
+        }
+        const place = pf.location ? p.place || '' : '';
+        if (st.template !== "photo" || revision !== photoRevision) { res(); return; }
+        const weather = pf.weather && st.weather ? `${Math.round(st.weather.temp)}° ${st.weather.text}` : '';
+        const right = [place, weather].filter(Boolean).join(' · ');
+        const rows = Number(!!(taken || camera)) + Number(!!(params || right));
+        const scale = Math.max(.8, Math.min(1.5, .85 * (Number(st.scale) || 1)));
+        const rowHeight = Math.ceil(19 * scale * 1.25 + 3 * scale);
+        const band = rows ? 14 + rows * rowHeight : 0;
         const ph = H - band;
         const s = Math.max(W / img.width, ph / img.height);
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
@@ -517,24 +545,25 @@ function draw(keepPhoto = false) {
           ctx.fillStyle = '#fff'; ctx.fillRect(0, ph, W, band);
           ctx.fillStyle = '#000';
           ctx.fillRect(0, ph, W, 2);
-          let yy = ph + 30;
+          let yy = ph + 8 + 19 * scale;
           if (taken || camera) {
-            ctx.font = '700 21px "PingFang SC","Microsoft YaHei",sans-serif';
+            ctx.font = `700 ${21 * scale}px "PingFang SC","Microsoft YaHei",sans-serif`;
             const leftWidth = Math.min(ctx.measureText(taken).width, (W - 64) * .55);
             if (taken) ctx.fillText(taken, 32, yy, leftWidth);
             if (camera) {
-              ctx.font = '700 19px "PingFang SC","Microsoft YaHei",sans-serif';
+              ctx.font = `700 ${19 * scale}px "PingFang SC","Microsoft YaHei",sans-serif`;
               ctx.textAlign = 'right';
               ctx.fillText(camera, W - 32, yy, W - 64 - leftWidth - (taken ? 16 : 0));
               ctx.textAlign = 'left';
             }
-            yy += 28;
+            yy += rowHeight;
           }
-          ctx.font = '400 19px "PingFang SC","Microsoft YaHei",sans-serif';
-          if (params) { ctx.fillText(params, 32, yy, W - 64); yy += 28; }
-          if (showWx) {
+          ctx.font = `400 ${19 * scale}px "PingFang SC","Microsoft YaHei",sans-serif`;
+          const rightWidth = Math.min(ctx.measureText(right).width, (W - 64) * (params ? .55 : 1));
+          if (params) ctx.fillText(params, 32, yy, W - 64 - rightWidth - (right ? 12 : 0));
+          if (right) {
             ctx.textAlign = 'right';
-            ctx.fillText(`${Math.round(st.weather.temp)}° ${st.weather.text}`, W - 32, yy);
+            ctx.fillText(right, W - 32, yy, rightWidth);
             ctx.textAlign = 'left';
           }
         }
