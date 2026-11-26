@@ -1,4 +1,4 @@
-const CACHE = 'todoocard-web-shell-v15';
+const CACHE = 'todoocard-web-shell-v16';
 const FILES = ['./', './index.html', './js/templates.js', './js/layout-pack.js', './js/layout-ui.js', './js/payload.js', './js/ble.js', './js/transfer-profiles.js', './js/card-connection.js', './js/ble-legacy.js', './js/ble-20261124b.js',
                './online/ui.js', './online/sources.js', './online/render.js', './online/tone.js', './online/controls.css', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const scopeURL = new URL(self.registration.scope);

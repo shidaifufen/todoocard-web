@@ -273,8 +273,8 @@ async function addPhotos(fileList) {
     try {
       const data = await shrink(f);
       const id = f.name + f.size + Math.random().toString(36).slice(2, 8);
-      db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name, exif });
       const exif = await readExif(f);
+      db.transaction('p', 'readwrite').objectStore('p').put({ id, data, name: f.name, exif });
       photos.push({ id, data, name: f.name, exif });
     } catch (e) { log(`跳过 ${f.name}：${e.message}`); }
   }
@@ -501,33 +501,44 @@ function draw(keepPhoto = false) {
         if (st.template !== "photo" || revision !== photoRevision) { res(); return; }
         const e = p.exif || {};
         const pf = Object.assign({date:true,time:true,camera:true,params:true,weather:true}, st.photoFields || {});
-        const line1 = [pf.date ? (e.taken || '') : '', pf.time ? (e.time || '') : ''].filter(Boolean).join('  ');
-        const line2 = [pf.camera ? (e.camera || '') : '', pf.params ? (e.params || '') : ''].filter(Boolean).join('  ');
+        const taken = [pf.date ? e.taken : '', pf.time ? e.time : ''].filter(Boolean).join('  ');
+        const camera = pf.camera ? e.camera || '' : '';
+        const params = pf.params ? e.params || '' : '';
         const showWx = pf.weather && st.weather;
-        const hasInfo = !!(line1 || line2 || showWx);
-        const rows = (line1 ? 1 : 0) + (line2 ? 1 : 0);
-        const band = hasInfo ? (24 + rows * 26 + (showWx ? 20 : 0)) : 0;
+        const rows = Number(!!(taken || camera)) + Number(!!params) + Number(!!showWx);
+        const band = rows ? 18 + rows * 28 : 0;
         const ph = H - band;
         const s = Math.max(W / img.width, ph / img.height);
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
         ctx.drawImage(img, (W - img.width * s) / 2, (ph - img.height * s) / 2, img.width * s, img.height * s);
         tuneImage(ctx,0,0,W,ph,{...neutral,...st.photoTone});
+        panelPreview(cv, { height: ph });
         if (band) {
           ctx.fillStyle = '#fff'; ctx.fillRect(0, ph, W, band);
-          ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.moveTo(0, ph); ctx.lineTo(W, ph); ctx.stroke();
           ctx.fillStyle = '#000';
-          let yy = ph + 26;
-          if (line1) { ctx.font = '700 21px "PingFang SC","Microsoft YaHei",sans-serif'; ctx.fillText(line1, 32, yy); yy += 26; }
-          if (line2) { ctx.font = '400 16px "PingFang SC",sans-serif'; ctx.fillText(line2, 32, yy); yy += 24; }
+          ctx.fillRect(0, ph, W, 2);
+          let yy = ph + 30;
+          if (taken || camera) {
+            ctx.font = '700 21px "PingFang SC","Microsoft YaHei",sans-serif';
+            const leftWidth = Math.min(ctx.measureText(taken).width, (W - 64) * .55);
+            if (taken) ctx.fillText(taken, 32, yy, leftWidth);
+            if (camera) {
+              ctx.font = '700 19px "PingFang SC","Microsoft YaHei",sans-serif';
+              ctx.textAlign = 'right';
+              ctx.fillText(camera, W - 32, yy, W - 64 - leftWidth - (taken ? 16 : 0));
+              ctx.textAlign = 'left';
+            }
+            yy += 28;
+          }
+          ctx.font = '400 19px "PingFang SC","Microsoft YaHei",sans-serif';
+          if (params) { ctx.fillText(params, 32, yy, W - 64); yy += 28; }
           if (showWx) {
-            ctx.font = '400 15px "PingFang SC",sans-serif'; ctx.textAlign = 'right';
+            ctx.textAlign = 'right';
             ctx.fillText(`${Math.round(st.weather.temp)}° ${st.weather.text}`, W - 32, yy);
             ctx.textAlign = 'left';
           }
         }
         finishGraphics(ctx,{x:0,y:0,width:W,height:ph});
-        panelPreview(cv);
         res();
       };
       img.onerror = () => res();
