@@ -3,12 +3,12 @@ import { analyzeCover, mountTone, neutral, panelColors, vivid } from './tone.js'
 import { paint, paintPrompt } from './render.js';
 
 export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {}, showPrompt = true, openLyrics,
-  remember = false } = {}) {
+  remember = false, initialTone = vivid, presets, onError = () => {} } = {}) {
   root.innerHTML = [
     '<div class="online-picker">',
     '<label>类型<select aria-label="类型" data-online="kind"></select></label>',
     '<form data-online="form"><label for="online-query">搜索</label><input id="online-query" aria-label="搜索关键词" data-online="query" type="search" maxlength="100">',
-    '<div class="online-actions"><button type="submit">搜索</button><button data-online="random" type="button">随机抽一张</button></div></form>',
+    '<div class="online-actions"><button data-online="submit" type="submit">搜索</button><button data-online="random" type="button">随机抽一张</button></div></form>',
     '<p data-online="status" role="status"></p>',
     '<label data-online="result-row" hidden>匹配结果<select aria-label="匹配结果" data-online="results"></select></label>',
     '<section data-online="music" hidden><label>版面<select aria-label="版面" data-online="style">',
@@ -32,7 +32,7 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
   const seen = new Set();
   const current = () => root.isConnected;
   let ready = false;
-  let anchor = -1, end = -1, selectingEnd = false, tone = vivid, redraw;
+  let anchor = -1, end = -1, selectingEnd = false, tone = initialTone, redraw;
   const cacheKey = 'todocard-online-editor-v1';
   let cache = {};
   try { if (remember) cache = JSON.parse(localStorage.getItem(cacheKey)) || {}; } catch {}
@@ -41,7 +41,7 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
     tone = next;
     cancelAnimationFrame(redraw);
     redraw = requestAnimationFrame(draw);
-  });
+  }, presets);
 
   function persist() {
     if (!remember) return;
@@ -202,17 +202,18 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
     if (kind === 'music' && $('style').value !== 'cover') void refreshLyrics();
   }
 
-  async function choose(fetchItems, random) {
+  async function choose(fetchItems, random, excluded, selectFirst = false) {
     const ticket = ++operation;
     ++lyricOperation;
     status.textContent = random ? '正在抽取…' : '正在查询…';
     try {
       const matches = await fetchItems();
       if (!current() || ticket !== operation) return;
-      if (!matches.length) throw new Error('没有匹配的内容，试试其他关键词。');
+      if (!matches.length) throw new Error(kind === 'earthquake' ? '近一周没有符合条件的重要地震。' : '没有匹配的内容，试试其他关键词。');
       if (random) {
-        let candidates = matches.filter(candidate => candidate.id !== item?.id && !seen.has(candidate.id));
-        if (!candidates.length) candidates = matches.filter(candidate => candidate.id !== item?.id);
+        const eligible = matches.filter(candidate => candidate.id !== item?.id && candidate.id !== excluded);
+        const unseen = eligible.filter(candidate => !seen.has(candidate.id));
+        const candidates = unseen.length ? unseen : eligible;
         if (!candidates.length) throw new Error('暂时没有其他结果，请再抽一次或换个关键词。');
         for (let attempt = 0; attempt < 3 && candidates.length; attempt++) {
           const index = Math.floor(Math.random() * candidates.length);
@@ -232,15 +233,21 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
         result = matches;
         $('results').replaceChildren(new Option('选择一项预览', ''));
         matches.forEach((hit, i) => $('results').add(new Option(hit.by ? hit.title + ' · ' + hit.by : hit.title, i + 1)));
-        $('result-row').hidden = false;
+        $('result-row').hidden = selectFirst && matches.length === 1;
         status.textContent = '找到 ' + matches.length + ' 项';
-        if (matches.length === 1) {
-          await select(matches[0], ticket);
-          if (current() && ticket === operation) $('results').value = '1';
+        if (matches.length === 1 || selectFirst) {
+          const first = matches.find(candidate => candidate.id !== excluded);
+          if (!first) throw new Error('暂无更新内容');
+          await select(first, ticket);
+          if (current() && ticket === operation) $('results').value = String(matches.indexOf(first) + 1);
+          return current() && ticket === operation;
         }
       }
     } catch (error) {
-      if (current() && ticket === operation) status.textContent = error.message || '在线来源暂时不可用';
+      if (current() && ticket === operation) {
+        status.textContent = error.message || '在线来源暂时不可用';
+        onError(status.textContent);
+      }
     }
   }
 
@@ -250,6 +257,8 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
     kind = $('kind').value;
     $('query').value = '';
     $('query').placeholder = kinds[kind].placeholder;
+    $('submit').textContent = kinds[kind].action || '搜索';
+    $('random').hidden = Boolean(kinds[kind].action);
     $('result-row').hidden = true;
     $('music').hidden = kind !== 'music';
     $('lyrics-row').hidden = true;
@@ -266,7 +275,7 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
   };
   $('form').onsubmit = event => {
     event.preventDefault();
-    void choose(() => findItems(kind, $('query').value), false);
+    void choose(() => findItems(kind, $('query').value), false, undefined, Boolean(kinds[kind].action));
   };
   $('random').onclick = () => void choose(() => randomItems(kind), true);
   $('results').onchange = async () => {
@@ -319,7 +328,7 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
     }
     selectingEnd = false;
     draw();
-  }, random: category => {
+  }, random: (category, excluded) => {
     $('style').value = 'cover';
     theme.value = 'auto';
     $('ink').value = 'auto';
@@ -327,6 +336,7 @@ export function mountOnline(root, canvas, { onCard = () => {}, onEmpty = () => {
       $('kind').value = category;
       $('kind').onchange();
     }
-    return choose(() => randomItems(category), true);
+    const direct = Boolean(kinds[category]?.action);
+    return choose(() => randomItems(category), !direct, excluded, direct);
   } };
 }
